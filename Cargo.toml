@@ -1,0 +1,19 @@
+[package]
+name = "codetracer-flow-recorder"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "codetracer-flow-recorder"
+path = "src/main.rs"
+
+[dependencies]
+codetracer_trace_types = "0.16"
+codetracer_trace_writer = "0.17"
+clap = { version = "4", features = ["derive"] }
+eyre = "0.6"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"
