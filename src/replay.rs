@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use codetracer_trace_writer::TraceEventsFileFormat;
-use eyre::{Context, Result, eyre};
+use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::tracer::{CadenceTracer, parse_ndjson};
+use crate::tracer::{parse_ndjson, CadenceTracer};
 
 // ---------------------------------------------------------------------------
 // Configuration and data types
@@ -88,9 +88,7 @@ pub struct TransactionScript {
 
 /// Normalise a transaction hash: strip optional "0x" prefix, lowercase.
 fn normalise_tx_hash(hash: &str) -> String {
-    hash.strip_prefix("0x")
-        .unwrap_or(hash)
-        .to_ascii_lowercase()
+    hash.strip_prefix("0x").unwrap_or(hash).to_ascii_lowercase()
 }
 
 /// Default binary name for the Go helper.
@@ -117,8 +115,8 @@ pub fn replay_transaction(
     out_dir: &Path,
     format: TraceEventsFileFormat,
 ) -> Result<()> {
-    let helper_bin = std::env::var(HELPER_BIN_ENV)
-        .unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
+    let helper_bin =
+        std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
 
     let mut cmd = Command::new(&helper_bin);
     cmd.arg("replay")
@@ -128,8 +126,7 @@ pub fn replay_transaction(
         .arg(&config.access_node_url);
 
     if let Some(ref source_dir) = config.source_dir {
-        cmd.arg("--source-dir")
-            .arg(source_dir);
+        cmd.arg("--source-dir").arg(source_dir);
     }
 
     let output = cmd.output().with_context(|| {
@@ -152,8 +149,8 @@ pub fn replay_transaction(
         ));
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .with_context(|| "Go helper produced non-UTF-8 output")?;
+    let stdout =
+        String::from_utf8(output.stdout).with_context(|| "Go helper produced non-UTF-8 output")?;
 
     let events = parse_ndjson(&stdout)?;
 
@@ -185,10 +182,8 @@ mod tests {
 
     #[test]
     fn test_replay_config_new() {
-        let config = ReplayConfig::new(
-            "0xABCDef1234567890",
-            "access.testnet.nodes.onflow.org:9000",
-        );
+        let config =
+            ReplayConfig::new("0xABCDef1234567890", "access.testnet.nodes.onflow.org:9000");
         assert_eq!(config.tx_hash, "abcdef1234567890");
         assert_eq!(
             config.access_node_url,
@@ -231,9 +226,7 @@ mod tests {
     fn test_transaction_script_serde_roundtrip() {
         let tx = TransactionScript {
             script: "transaction { execute { log(\"hello\") } }".to_string(),
-            arguments: vec![
-                r#"{"type":"String","value":"world"}"#.to_string(),
-            ],
+            arguments: vec![r#"{"type":"String","value":"world"}"#.to_string()],
             tx_hash: "abc123".to_string(),
         };
         let json = serde_json::to_string(&tx).unwrap();

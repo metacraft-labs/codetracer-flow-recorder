@@ -16,13 +16,14 @@ use crate::tracer::CadenceTracer;
 /// Runs the Go helper binary on the Cadence source file at `source_path`,
 /// parses the NDJSON trace output, and writes CodeTracer trace files to
 /// `out_dir`.
-pub fn record(
-    source_path: &Path,
-    out_dir: &Path,
-    format: TraceEventsFileFormat,
-) -> Result<()> {
-    let source_code = std::fs::read_to_string(source_path)
-        .map_err(|e| eyre::eyre!("failed to read source file {}: {}", source_path.display(), e))?;
+pub fn record(source_path: &Path, out_dir: &Path, format: TraceEventsFileFormat) -> Result<()> {
+    let source_code = std::fs::read_to_string(source_path).map_err(|e| {
+        eyre::eyre!(
+            "failed to read source file {}: {}",
+            source_path.display(),
+            e
+        )
+    })?;
 
     CadenceTracer::trace_program(source_path, &source_code, out_dir, format)
 }

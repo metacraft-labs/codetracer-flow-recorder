@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use codetracer_flow_recorder::tracer::{CadenceTracer, TraceEvent, parse_ndjson};
+use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer, TraceEvent};
 use codetracer_trace_writer::TraceEventsFileFormat;
 
 // ---------------------------------------------------------------------------
@@ -62,12 +62,8 @@ fn run_tracer_from_ndjson(ndjson: &str, source_path: &Path, out_dir: &Path) {
 
 /// Run the tracer via the Go helper binary.
 fn run_tracer_on_file(source_path: &Path, out_dir: &Path) {
-    codetracer_flow_recorder::recorder::record(
-        source_path,
-        out_dir,
-        TraceEventsFileFormat::Json,
-    )
-    .expect("trace_program should succeed");
+    codetracer_flow_recorder::recorder::record(source_path, out_dir, TraceEventsFileFormat::Json)
+        .expect("trace_program should succeed");
 }
 
 /// Parse the trace events JSON from the output directory.
@@ -269,10 +265,8 @@ fn test_ndjson_step_events() {
 
     let events = load_trace_events(&out_dir);
 
-    let step_events: Vec<&serde_json::Value> = events
-        .iter()
-        .filter(|e| e.get("Step").is_some())
-        .collect();
+    let step_events: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e.get("Step").is_some()).collect();
 
     assert!(
         step_events.len() >= 6,
@@ -284,7 +278,9 @@ fn test_ndjson_step_events() {
     for event in &step_events {
         let step = event.get("Step").unwrap();
         assert!(step.get("path_id").is_some(), "Step should have path_id");
-        let line = step["line"].as_i64().expect("Step line should be an integer");
+        let line = step["line"]
+            .as_i64()
+            .expect("Step line should be an integer");
         assert!(line > 0, "Step line should be positive, got {}", line);
     }
 
@@ -441,9 +437,18 @@ fn test_parse_resource_lifecycle_events() {
     let events = parse_ndjson(resource_lifecycle_ndjson()).expect("should parse resource NDJSON");
 
     // Count resource events.
-    let create_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceCreate { .. })).count();
-    let move_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceMove { .. })).count();
-    let destroy_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceDestroy { .. })).count();
+    let create_count = events
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::ResourceCreate { .. }))
+        .count();
+    let move_count = events
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::ResourceMove { .. }))
+        .count();
+    let destroy_count = events
+        .iter()
+        .filter(|e| matches!(e, TraceEvent::ResourceDestroy { .. }))
+        .count();
 
     assert_eq!(create_count, 1, "should have 1 resource_create event");
     assert_eq!(move_count, 1, "should have 1 resource_move event");
@@ -478,8 +483,14 @@ fn test_convert_resource_events_to_trace() {
     );
 
     // Should contain FlowToken.Vault#1001.
-    let has_vault = resource_vars.iter().any(|n| n.contains("FlowToken.Vault#1001"));
-    assert!(has_vault, "should have @resource:FlowToken.Vault#1001, got: {:?}", resource_vars);
+    let has_vault = resource_vars
+        .iter()
+        .any(|n| n.contains("FlowToken.Vault#1001"));
+    assert!(
+        has_vault,
+        "should have @resource:FlowToken.Vault#1001, got: {:?}",
+        resource_vars
+    );
 
     // Verify resource values contain lifecycle descriptions.
     let string_values: Vec<String> = events
@@ -488,16 +499,31 @@ fn test_convert_resource_events_to_trace() {
             let val = e.get("Value")?;
             let value = val.get("value")?;
             if value.get("kind").and_then(|k| k.as_str()) == Some("String") {
-                value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+                value
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
             } else {
                 None
             }
         })
         .collect();
 
-    assert!(string_values.iter().any(|v| v.contains("created")), "should have 'created' value, got: {:?}", string_values);
-    assert!(string_values.iter().any(|v| v.contains("moved")), "should have 'moved' value, got: {:?}", string_values);
-    assert!(string_values.iter().any(|v| v.contains("destroyed")), "should have 'destroyed' value, got: {:?}", string_values);
+    assert!(
+        string_values.iter().any(|v| v.contains("created")),
+        "should have 'created' value, got: {:?}",
+        string_values
+    );
+    assert!(
+        string_values.iter().any(|v| v.contains("moved")),
+        "should have 'moved' value, got: {:?}",
+        string_values
+    );
+    assert!(
+        string_values.iter().any(|v| v.contains("destroyed")),
+        "should have 'destroyed' value, got: {:?}",
+        string_values
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -562,8 +588,14 @@ fn test_mixed_resource_and_regular_events() {
 
     // Regular variables should still work.
     let var_names = collect_variable_names(&events);
-    assert!(var_names.contains(&"balance".to_string()), "should have 'balance' variable");
-    assert!(var_names.contains(&"amount".to_string()), "should have 'amount' variable");
+    assert!(
+        var_names.contains(&"balance".to_string()),
+        "should have 'balance' variable"
+    );
+    assert!(
+        var_names.contains(&"amount".to_string()),
+        "should have 'amount' variable"
+    );
 
     // Resource variable should also appear.
     let resource_vars: Vec<&String> = var_names
@@ -600,13 +632,27 @@ fn test_nested_resource_tracking() {
         .collect();
 
     // Should track multiple resource types and UUIDs.
-    let has_collection = resource_vars.iter().any(|n| n.contains("NFT.Collection#2001"));
+    let has_collection = resource_vars
+        .iter()
+        .any(|n| n.contains("NFT.Collection#2001"));
     let has_token_2002 = resource_vars.iter().any(|n| n.contains("NFT.Token#2002"));
     let has_token_2003 = resource_vars.iter().any(|n| n.contains("NFT.Token#2003"));
 
-    assert!(has_collection, "should track NFT.Collection#2001, got: {:?}", resource_vars);
-    assert!(has_token_2002, "should track NFT.Token#2002, got: {:?}", resource_vars);
-    assert!(has_token_2003, "should track NFT.Token#2003, got: {:?}", resource_vars);
+    assert!(
+        has_collection,
+        "should track NFT.Collection#2001, got: {:?}",
+        resource_vars
+    );
+    assert!(
+        has_token_2002,
+        "should track NFT.Token#2002, got: {:?}",
+        resource_vars
+    );
+    assert!(
+        has_token_2003,
+        "should track NFT.Token#2003, got: {:?}",
+        resource_vars
+    );
 
     // Verify the lifecycle values appear in correct order for collection:
     // created, moved, destroyed.
@@ -616,7 +662,10 @@ fn test_nested_resource_tracking() {
             let val = e.get("Value")?;
             let value = val.get("value")?;
             if value.get("kind").and_then(|k| k.as_str()) == Some("String") {
-                value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+                value
+                    .get("text")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
             } else {
                 None
             }
@@ -624,13 +673,28 @@ fn test_nested_resource_tracking() {
         .collect();
 
     // Count lifecycle events.
-    let created_count = string_values.iter().filter(|v| v.contains("created")).count();
+    let created_count = string_values
+        .iter()
+        .filter(|v| v.contains("created"))
+        .count();
     let moved_count = string_values.iter().filter(|v| v.contains("moved")).count();
-    let destroyed_count = string_values.iter().filter(|v| v.contains("destroyed")).count();
+    let destroyed_count = string_values
+        .iter()
+        .filter(|v| v.contains("destroyed"))
+        .count();
 
-    assert_eq!(created_count, 3, "should have 3 created events (collection + 2 tokens)");
-    assert_eq!(moved_count, 2, "should have 2 moved events (collection + token)");
-    assert_eq!(destroyed_count, 2, "should have 2 destroyed events (token + collection)");
+    assert_eq!(
+        created_count, 3,
+        "should have 3 created events (collection + 2 tokens)"
+    );
+    assert_eq!(
+        moved_count, 2,
+        "should have 2 moved events (collection + token)"
+    );
+    assert_eq!(
+        destroyed_count, 2,
+        "should have 2 destroyed events (token + collection)"
+    );
 }
 
 // ===========================================================================
@@ -667,7 +731,10 @@ fn test_go_helper_compile_and_run() {
     assert!(!events.is_empty(), "trace should have at least one event");
 
     let step_count = events.iter().filter(|e| e.get("Step").is_some()).count();
-    assert!(step_count > 0, "trace should contain at least one Step event");
+    assert!(
+        step_count > 0,
+        "trace should contain at least one Step event"
+    );
 }
 
 #[test]

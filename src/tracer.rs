@@ -14,8 +14,8 @@ use std::process::Command;
 
 use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
-use eyre::{Context, Result, eyre};
+use codetracer_trace_writer::{create_trace_writer, TraceEventsFileFormat};
+use eyre::{eyre, Context, Result};
 use serde::Deserialize;
 
 // source_map is available for future use with Go helper position mapping
@@ -29,10 +29,7 @@ use serde::Deserialize;
 #[serde(tag = "type")]
 pub enum TraceEvent {
     #[serde(rename = "step")]
-    Step {
-        file: String,
-        line: u32,
-    },
+    Step { file: String, line: u32 },
     #[serde(rename = "variable")]
     Variable {
         name: String,
@@ -41,9 +38,7 @@ pub enum TraceEvent {
         cadence_type: Option<String>,
     },
     #[serde(rename = "call")]
-    Call {
-        name: String,
-    },
+    Call { name: String },
     #[serde(rename = "return")]
     Return {
         value: String,
@@ -52,7 +47,6 @@ pub enum TraceEvent {
     },
 
     // ----- Resource lifecycle events (M4) -----
-
     #[serde(rename = "resource_create")]
     ResourceCreate {
         resource_type: String,
@@ -97,8 +91,13 @@ pub fn parse_ndjson(text: &str) -> Result<Vec<TraceEvent>> {
         if line.is_empty() {
             continue;
         }
-        let event: TraceEvent = serde_json::from_str(line)
-            .with_context(|| format!("failed to parse NDJSON trace event at line {}: {}", i + 1, line))?;
+        let event: TraceEvent = serde_json::from_str(line).with_context(|| {
+            format!(
+                "failed to parse NDJSON trace event at line {}: {}",
+                i + 1,
+                line
+            )
+        })?;
         events.push(event);
     }
     Ok(events)
@@ -117,8 +116,8 @@ const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
 /// Run the Go helper binary on a Cadence source file and return the parsed
 /// NDJSON trace events.
 pub fn run_go_helper(source_path: &Path) -> Result<Vec<TraceEvent>> {
-    let helper_bin = std::env::var(HELPER_BIN_ENV)
-        .unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
+    let helper_bin =
+        std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
 
     let output = Command::new(&helper_bin)
         .arg(source_path)
@@ -143,8 +142,8 @@ pub fn run_go_helper(source_path: &Path) -> Result<Vec<TraceEvent>> {
         ));
     }
 
-    let stdout = String::from_utf8(output.stdout)
-        .with_context(|| "Go helper produced non-UTF-8 output")?;
+    let stdout =
+        String::from_utf8(output.stdout).with_context(|| "Go helper produced non-UTF-8 output")?;
 
     parse_ndjson(&stdout)
 }
@@ -205,11 +204,8 @@ impl CadenceTracer {
 
         // Register common Cadence types.
         for type_name in &["Int", "UInt64", "Fix64", "Bool", "String", "Address"] {
-            let type_id = TraceWriter::ensure_type_id(
-                &mut *tracer.writer,
-                TypeKind::Int,
-                type_name,
-            );
+            let type_id =
+                TraceWriter::ensure_type_id(&mut *tracer.writer, TypeKind::Int, type_name);
             tracer.type_ids.insert(type_name.to_string(), type_id);
         }
 
@@ -217,12 +213,10 @@ impl CadenceTracer {
         tracer.convert_events(source_path, &events)?;
 
         // -- 6. Finish writing --
-        TraceWriter::finish_writing_trace_events(&mut *tracer.writer)
-            .map_err(|e| eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_events(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
         TraceWriter::finish_writing_trace_metadata(&mut *tracer.writer)
             .map_err(|e| eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_paths(&mut *tracer.writer)
-            .map_err(|e| eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_paths(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
 
         Ok(())
     }
@@ -265,11 +259,8 @@ impl CadenceTracer {
 
         // Register common Cadence types.
         for type_name in &["Int", "UInt64", "Fix64", "Bool", "String", "Address"] {
-            let type_id = TraceWriter::ensure_type_id(
-                &mut *tracer.writer,
-                TypeKind::Int,
-                type_name,
-            );
+            let type_id =
+                TraceWriter::ensure_type_id(&mut *tracer.writer, TypeKind::Int, type_name);
             tracer.type_ids.insert(type_name.to_string(), type_id);
         }
 
@@ -277,40 +268,32 @@ impl CadenceTracer {
         tracer.convert_events(source_path, events)?;
 
         // Finish writing.
-        TraceWriter::finish_writing_trace_events(&mut *tracer.writer)
-            .map_err(|e| eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_events(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
         TraceWriter::finish_writing_trace_metadata(&mut *tracer.writer)
             .map_err(|e| eyre!("{e}"))?;
-        TraceWriter::finish_writing_trace_paths(&mut *tracer.writer)
-            .map_err(|e| eyre!("{e}"))?;
+        TraceWriter::finish_writing_trace_paths(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
 
         Ok(())
     }
 
     /// Convert NDJSON trace events into CodeTracer trace writer calls.
-    fn convert_events(
-        &mut self,
-        source_path: &Path,
-        events: &[TraceEvent],
-    ) -> Result<()> {
+    fn convert_events(&mut self, source_path: &Path, events: &[TraceEvent]) -> Result<()> {
         for event in events {
             match event {
                 TraceEvent::Step { file: _, line } => {
-                    TraceWriter::register_step(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                    );
+                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
                 }
-                TraceEvent::Variable { name, value, cadence_type } => {
-                    let type_name = cadence_type
-                        .as_deref()
-                        .unwrap_or("Int");
-                    let type_id = self.type_ids.get(type_name)
+                TraceEvent::Variable {
+                    name,
+                    value,
+                    cadence_type,
+                } => {
+                    let type_name = cadence_type.as_deref().unwrap_or("Int");
+                    let type_id = self
+                        .type_ids
+                        .get(type_name)
                         .copied()
-                        .unwrap_or_else(|| {
-                            self.type_ids.get("Int").copied().unwrap()
-                        });
+                        .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
 
                     // Try to parse the value as an integer.
                     let val_record = if let Ok(i) = value.parse::<i64>() {
@@ -338,15 +321,16 @@ impl CadenceTracer {
                     );
                     TraceWriter::register_call(&mut *self.writer, fn_id, vec![]);
                 }
-                TraceEvent::Return { value, cadence_type } => {
-                    let type_name = cadence_type
-                        .as_deref()
-                        .unwrap_or("Int");
-                    let type_id = self.type_ids.get(type_name)
+                TraceEvent::Return {
+                    value,
+                    cadence_type,
+                } => {
+                    let type_name = cadence_type.as_deref().unwrap_or("Int");
+                    let type_id = self
+                        .type_ids
+                        .get(type_name)
                         .copied()
-                        .unwrap_or_else(|| {
-                            self.type_ids.get("Int").copied().unwrap()
-                        });
+                        .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
 
                     if value.is_empty() || value == "nil" || value == "Void" {
                         TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
@@ -363,14 +347,15 @@ impl CadenceTracer {
                 }
 
                 // --- Resource lifecycle events (M4) ---
-
-                TraceEvent::ResourceCreate { resource_type, uuid, owner, file: _, line } => {
+                TraceEvent::ResourceCreate {
+                    resource_type,
+                    uuid,
+                    owner,
+                    file: _,
+                    line,
+                } => {
                     // Emit a step at the resource creation site.
-                    TraceWriter::register_step(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                    );
+                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
 
                     // Emit the resource as a variable with special naming convention.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -386,13 +371,16 @@ impl CadenceTracer {
                     );
                 }
 
-                TraceEvent::ResourceMove { resource_type, uuid, from_owner, to_owner, file: _, line } => {
+                TraceEvent::ResourceMove {
+                    resource_type,
+                    uuid,
+                    from_owner,
+                    to_owner,
+                    file: _,
+                    line,
+                } => {
                     // Emit a step at the move site.
-                    TraceWriter::register_step(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                    );
+                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
 
                     // Emit the resource as a variable showing the ownership transfer.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -408,13 +396,15 @@ impl CadenceTracer {
                     );
                 }
 
-                TraceEvent::ResourceDestroy { resource_type, uuid, owner, file: _, line } => {
+                TraceEvent::ResourceDestroy {
+                    resource_type,
+                    uuid,
+                    owner,
+                    file: _,
+                    line,
+                } => {
                     // Emit a step at the destroy site.
-                    TraceWriter::register_step(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                    );
+                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
 
                     // Emit the resource as a variable showing destruction.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -574,9 +564,7 @@ mod tests {
         let variables: Vec<_> = events
             .iter()
             .filter_map(|e| match e {
-                TraceEvent::Variable { name, value, .. } => {
-                    Some((name.as_str(), value.as_str()))
-                }
+                TraceEvent::Variable { name, value, .. } => Some((name.as_str(), value.as_str())),
                 _ => None,
             })
             .collect();
@@ -729,21 +717,33 @@ mod tests {
             .iter()
             .filter(|e| e.get("Step").is_some())
             .count();
-        assert!(step_count >= 6, "should have at least 6 step events, got {}", step_count);
+        assert!(
+            step_count >= 6,
+            "should have at least 6 step events, got {}",
+            step_count
+        );
 
         // Should have Call events.
         let call_count = trace_array
             .iter()
             .filter(|e| e.get("Call").is_some())
             .count();
-        assert!(call_count >= 2, "should have at least 2 Call events, got {}", call_count);
+        assert!(
+            call_count >= 2,
+            "should have at least 2 Call events, got {}",
+            call_count
+        );
 
         // Should have Return events.
         let return_count = trace_array
             .iter()
             .filter(|e| e.get("Return").is_some())
             .count();
-        assert!(return_count >= 2, "should have at least 2 Return events, got {}", return_count);
+        assert!(
+            return_count >= 2,
+            "should have at least 2 Return events, got {}",
+            return_count
+        );
 
         // Verify that value 94 appears in the trace.
         let has_94 = trace_array.iter().any(|e| {
@@ -767,11 +767,26 @@ mod tests {
                     .map(|s| s.to_string())
             })
             .collect();
-        assert!(var_names.contains(&"a".to_string()), "should have variable 'a'");
-        assert!(var_names.contains(&"b".to_string()), "should have variable 'b'");
-        assert!(var_names.contains(&"sum_val".to_string()), "should have variable 'sum_val'");
-        assert!(var_names.contains(&"doubled".to_string()), "should have variable 'doubled'");
-        assert!(var_names.contains(&"final_result".to_string()), "should have variable 'final_result'");
+        assert!(
+            var_names.contains(&"a".to_string()),
+            "should have variable 'a'"
+        );
+        assert!(
+            var_names.contains(&"b".to_string()),
+            "should have variable 'b'"
+        );
+        assert!(
+            var_names.contains(&"sum_val".to_string()),
+            "should have variable 'sum_val'"
+        );
+        assert!(
+            var_names.contains(&"doubled".to_string()),
+            "should have variable 'doubled'"
+        );
+        assert!(
+            var_names.contains(&"final_result".to_string()),
+            "should have variable 'final_result'"
+        );
     }
 
     #[test]
