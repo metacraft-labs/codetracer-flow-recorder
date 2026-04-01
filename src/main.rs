@@ -43,6 +43,13 @@ enum Commands {
     /// to `--out-dir`.
     Record(RecordArgs),
 
+    /// Replay a Flow on-chain transaction.
+    ///
+    /// Fetches the transaction from a Flow Access Node, extracts its
+    /// Cadence script and arguments, replays execution through the
+    /// Go tracer helper, and writes CodeTracer trace files to `--out-dir`.
+    Replay(ReplayArgs),
+
     /// Print version information.
     Version,
 }
@@ -51,6 +58,29 @@ enum Commands {
 enum OutputFormat {
     Binary,
     Json,
+}
+
+#[derive(Debug, clap::Args)]
+struct ReplayArgs {
+    /// Flow transaction hash to replay (hex, with or without 0x prefix).
+    #[arg(long)]
+    tx_hash: String,
+
+    /// Flow Access Node gRPC endpoint.
+    #[arg(long, default_value = codetracer_flow_recorder::replay::DEFAULT_ACCESS_NODE_URL)]
+    access_node: String,
+
+    /// Optional directory containing Cadence source files for source mapping.
+    #[arg(long)]
+    source_dir: Option<PathBuf>,
+
+    /// Directory where the trace files will be written.
+    #[arg(short = 'o', long, default_value = "./ct-traces/")]
+    out_dir: PathBuf,
+
+    /// Output format for the trace data.
+    #[arg(short = 'f', long, default_value = "binary")]
+    format: OutputFormat,
 }
 
 #[derive(Debug, clap::Args)]
@@ -77,6 +107,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Commands::Record(args) => record(args),
+        Commands::Replay(args) => replay(args),
         Commands::Version => {
             println!(
                 "codetracer-flow-recorder {}",
@@ -113,6 +144,41 @@ fn record(args: RecordArgs) -> Result<()> {
 
     // 3. Run the recorder
     codetracer_flow_recorder::recorder::record(&source_path, out_dir, format)?;
+
+    eprintln!("Trace files written to {}", out_dir.display());
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// `replay` implementation
+// ---------------------------------------------------------------------------
+
+/// Execute the `replay` subcommand.
+fn replay(args: ReplayArgs) -> Result<()> {
+    let format = match args.format {
+        OutputFormat::Binary => TraceEventsFileFormat::Binary,
+        OutputFormat::Json => TraceEventsFileFormat::Json,
+    };
+
+    let mut config = codetracer_flow_recorder::replay::ReplayConfig::new(
+        &args.tx_hash,
+        &args.access_node,
+    );
+    if let Some(source_dir) = args.source_dir {
+        config = config.with_source_dir(source_dir);
+    }
+
+    eprintln!(
+        "Replaying transaction {} via {}",
+        config.tx_hash, config.access_node_url
+    );
+
+    let out_dir = &args.out_dir;
+    std::fs::create_dir_all(out_dir)
+        .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
+
+    codetracer_flow_recorder::replay::replay_transaction(&config, out_dir, format)?;
 
     eprintln!("Trace files written to {}", out_dir.display());
 
