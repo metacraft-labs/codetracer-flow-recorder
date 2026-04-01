@@ -50,6 +50,36 @@ pub enum TraceEvent {
         #[serde(default)]
         cadence_type: Option<String>,
     },
+
+    // ----- Resource lifecycle events (M4) -----
+
+    #[serde(rename = "resource_create")]
+    ResourceCreate {
+        resource_type: String,
+        uuid: u64,
+        owner: String,
+        file: String,
+        line: u32,
+    },
+
+    #[serde(rename = "resource_move")]
+    ResourceMove {
+        resource_type: String,
+        uuid: u64,
+        from_owner: String,
+        to_owner: String,
+        file: String,
+        line: u32,
+    },
+
+    #[serde(rename = "resource_destroy")]
+    ResourceDestroy {
+        resource_type: String,
+        uuid: u64,
+        owner: String,
+        file: String,
+        line: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -331,10 +361,93 @@ impl CadenceTracer {
                         TraceWriter::register_return(&mut *self.writer, val);
                     }
                 }
+
+                // --- Resource lifecycle events (M4) ---
+
+                TraceEvent::ResourceCreate { resource_type, uuid, owner, file: _, line } => {
+                    // Emit a step at the resource creation site.
+                    TraceWriter::register_step(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                    );
+
+                    // Emit the resource as a variable with special naming convention.
+                    let var_name = format!("@resource:{}#{}", resource_type, uuid);
+                    let type_id = self.ensure_resource_type(resource_type);
+                    let val = ValueRecord::String {
+                        text: format!("created(owner={})", owner),
+                        type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *self.writer,
+                        &var_name,
+                        val,
+                    );
+                }
+
+                TraceEvent::ResourceMove { resource_type, uuid, from_owner, to_owner, file: _, line } => {
+                    // Emit a step at the move site.
+                    TraceWriter::register_step(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                    );
+
+                    // Emit the resource as a variable showing the ownership transfer.
+                    let var_name = format!("@resource:{}#{}", resource_type, uuid);
+                    let type_id = self.ensure_resource_type(resource_type);
+                    let val = ValueRecord::String {
+                        text: format!("moved({} -> {})", from_owner, to_owner),
+                        type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *self.writer,
+                        &var_name,
+                        val,
+                    );
+                }
+
+                TraceEvent::ResourceDestroy { resource_type, uuid, owner, file: _, line } => {
+                    // Emit a step at the destroy site.
+                    TraceWriter::register_step(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                    );
+
+                    // Emit the resource as a variable showing destruction.
+                    let var_name = format!("@resource:{}#{}", resource_type, uuid);
+                    let type_id = self.ensure_resource_type(resource_type);
+                    let val = ValueRecord::String {
+                        text: format!("destroyed(owner={})", owner),
+                        type_id,
+                    };
+                    TraceWriter::register_variable_with_full_value(
+                        &mut *self.writer,
+                        &var_name,
+                        val,
+                    );
+                }
             }
         }
 
         Ok(())
+    }
+
+    /// Ensure we have a type ID registered for a resource type.
+    fn ensure_resource_type(&mut self, resource_type: &str) -> codetracer_trace_types::TypeId {
+        let key = format!("@Resource:{}", resource_type);
+        if let Some(&id) = self.type_ids.get(&key) {
+            return id;
+        }
+        let type_id = TraceWriter::ensure_type_id(
+            &mut *self.writer,
+            TypeKind::Int, // Using Int kind as a placeholder for resource types
+            &key,
+        );
+        self.type_ids.insert(key, type_id);
+        type_id
     }
 }
 
@@ -503,6 +616,62 @@ mod tests {
     fn test_parse_ndjson_unknown_type() {
         let result = parse_ndjson(r#"{"type":"unknown_event","data":"foo"}"#);
         assert!(result.is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Resource lifecycle event parsing tests (M4)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_ndjson_resource_create() {
+        let input = r#"{"type":"resource_create","resource_type":"FlowToken.Vault","uuid":1001,"owner":"0x01","file":"test.cdc","line":5}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::ResourceCreate {
+                resource_type: "FlowToken.Vault".to_string(),
+                uuid: 1001,
+                owner: "0x01".to_string(),
+                file: "test.cdc".to_string(),
+                line: 5,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_resource_move() {
+        let input = r#"{"type":"resource_move","resource_type":"FlowToken.Vault","uuid":1001,"from_owner":"0x01","to_owner":"0x02","file":"test.cdc","line":10}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::ResourceMove {
+                resource_type: "FlowToken.Vault".to_string(),
+                uuid: 1001,
+                from_owner: "0x01".to_string(),
+                to_owner: "0x02".to_string(),
+                file: "test.cdc".to_string(),
+                line: 10,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_resource_destroy() {
+        let input = r#"{"type":"resource_destroy","resource_type":"FlowToken.Vault","uuid":1001,"owner":"0x02","file":"test.cdc","line":15}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::ResourceDestroy {
+                resource_type: "FlowToken.Vault".to_string(),
+                uuid: 1001,
+                owner: "0x02".to_string(),
+                file: "test.cdc".to_string(),
+                line: 15,
+            }
+        );
     }
 
     // -----------------------------------------------------------------------

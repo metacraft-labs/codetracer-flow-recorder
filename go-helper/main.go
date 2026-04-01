@@ -28,17 +28,31 @@ import (
 
 // TraceEvent represents a single NDJSON trace line.
 type TraceEvent struct {
-	Type        string `json:"type"`
-	File        string `json:"file,omitempty"`
-	Line        int    `json:"line,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Value       string `json:"value,omitempty"`
-	CadenceType string `json:"cadence_type,omitempty"`
+	Type         string `json:"type"`
+	File         string `json:"file,omitempty"`
+	Line         int    `json:"line,omitempty"`
+	Name         string `json:"name,omitempty"`
+	Value        string `json:"value,omitempty"`
+	CadenceType  string `json:"cadence_type,omitempty"`
+	ResourceType string `json:"resource_type,omitempty"`
+	UUID         uint64 `json:"uuid,omitempty"`
+	Owner        string `json:"owner,omitempty"`
+	FromOwner    string `json:"from_owner,omitempty"`
+	ToOwner      string `json:"to_owner,omitempty"`
+}
+
+// TracerConfig holds configuration for resource tracking.
+type TracerConfig struct {
+	// ResourceOwnerChangeHandlerEnabled enables resource lifecycle event emission.
+	ResourceOwnerChangeHandlerEnabled bool
 }
 
 var (
 	encoder    *json.Encoder
 	sourceFile string
+	tracerConfig = TracerConfig{
+		ResourceOwnerChangeHandlerEnabled: true,
+	}
 )
 
 func emit(event TraceEvent) {
@@ -48,7 +62,17 @@ func emit(event TraceEvent) {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: cadence-trace-helper <source-file.cdc>\n")
+		fmt.Fprintf(os.Stderr, "       cadence-trace-helper replay --tx-hash <hash> --access-node <url> [--source-dir <dir>]\n")
 		os.Exit(1)
+	}
+
+	encoder = json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+
+	// Check if we are in replay mode.
+	if os.Args[1] == "replay" {
+		runReplayMode(os.Args[2:])
+		return
 	}
 
 	sourceFile = os.Args[1]
@@ -63,9 +87,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	encoder = json.NewEncoder(os.Stdout)
-	encoder.SetEscapeHTML(false)
-
 	source := string(sourceBytes)
 
 	// Execute the Cadence script using the interpreter directly.
@@ -75,6 +96,132 @@ func main() {
 		fmt.Fprintf(os.Stderr, "cadence execution error: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// emitResourceCreate emits a resource_create NDJSON event.
+func emitResourceCreate(resourceType string, uuid uint64, owner string, file string, line int) {
+	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
+		return
+	}
+	emit(TraceEvent{
+		Type:         "resource_create",
+		ResourceType: resourceType,
+		UUID:         uuid,
+		Owner:        owner,
+		File:         file,
+		Line:         line,
+	})
+}
+
+// emitResourceMove emits a resource_move NDJSON event when ownership changes.
+func emitResourceMove(resourceType string, uuid uint64, fromOwner string, toOwner string, file string, line int) {
+	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
+		return
+	}
+	emit(TraceEvent{
+		Type:         "resource_move",
+		ResourceType: resourceType,
+		UUID:         uuid,
+		FromOwner:    fromOwner,
+		ToOwner:      toOwner,
+		File:         file,
+		Line:         line,
+	})
+}
+
+// emitResourceDestroy emits a resource_destroy NDJSON event.
+func emitResourceDestroy(resourceType string, uuid uint64, owner string, file string, line int) {
+	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
+		return
+	}
+	emit(TraceEvent{
+		Type:         "resource_destroy",
+		ResourceType: resourceType,
+		UUID:         uuid,
+		Owner:        owner,
+		File:         file,
+		Line:         line,
+	})
+}
+
+// runReplayMode handles the "replay" subcommand.
+// It parses --tx-hash, --access-node, and optional --source-dir flags,
+// fetches the transaction from the Flow Access API, and executes its
+// Cadence script through the emulator with tracing hooks.
+func runReplayMode(args []string) {
+	var txHash, accessNode, sourceDir string
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--tx-hash":
+			if i+1 < len(args) {
+				i++
+				txHash = args[i]
+			}
+		case "--access-node":
+			if i+1 < len(args) {
+				i++
+				accessNode = args[i]
+			}
+		case "--source-dir":
+			if i+1 < len(args) {
+				i++
+				sourceDir = args[i]
+			}
+		}
+	}
+
+	if txHash == "" {
+		fmt.Fprintf(os.Stderr, "replay: --tx-hash is required\n")
+		os.Exit(1)
+	}
+	if accessNode == "" {
+		accessNode = "access.mainnet.nodes.onflow.org:9000"
+	}
+
+	err := replayTransaction(txHash, accessNode, sourceDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "replay error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// replayTransaction fetches a transaction from the Flow Access API and
+// replays its Cadence script with tracing enabled.
+//
+// TODO(M5): This is a stub implementation. The full version will:
+//   - Use flow-go-sdk to connect to the Access Node via gRPC
+//   - Fetch the transaction by hash using client.GetTransaction()
+//   - Extract the Cadence script and arguments
+//   - Set up the Flow emulator in fork mode at the transaction's block height
+//   - Execute the script through the emulator with tracing hooks
+//
+// For now, it emits an error indicating that the transaction fetch is not yet
+// connected to the real Access API.
+func replayTransaction(txHash string, accessNode string, sourceDir string) error {
+	_ = sourceDir // Will be used for source mapping in the full implementation.
+
+	// Set the sourceFile for trace events.
+	sourceFile = fmt.Sprintf("tx_%s.cdc", txHash)
+
+	fmt.Fprintf(os.Stderr, "replay: fetching transaction %s from %s\n", txHash, accessNode)
+
+	// TODO(M5): Replace this stub with real Access API calls:
+	//
+	//   import "github.com/onflow/flow-go-sdk/access/grpc"
+	//
+	//   client, err := grpc.NewClient(accessNode)
+	//   tx, err := client.GetTransaction(ctx, flow.HexToID(txHash))
+	//   script := string(tx.Script)
+	//   args := tx.Arguments
+	//
+	// Then execute the script through the emulator in fork mode and trace it.
+
+	return fmt.Errorf(
+		"replay mode is not yet fully implemented: "+
+			"transaction fetch from Access API requires flow-go-sdk integration (tx=%s, node=%s)",
+		txHash, accessNode,
+	)
 }
 
 func executeAndTrace(source string) error {

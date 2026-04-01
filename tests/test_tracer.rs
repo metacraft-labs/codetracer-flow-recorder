@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use codetracer_flow_recorder::tracer::{CadenceTracer, parse_ndjson};
+use codetracer_flow_recorder::tracer::{CadenceTracer, TraceEvent, parse_ndjson};
 use codetracer_trace_writer::TraceEventsFileFormat;
 
 // ---------------------------------------------------------------------------
@@ -394,6 +394,243 @@ fn test_ndjson_metadata_structure() {
         metadata["workdir"].is_string(),
         "metadata 'workdir' should be a string"
     );
+}
+
+// ===========================================================================
+// Resource lifecycle tests (M4 - always run, no Go helper needed)
+// ===========================================================================
+
+/// Build NDJSON trace with resource lifecycle events.
+fn resource_lifecycle_ndjson() -> &'static str {
+    r#"{"type":"call","name":"main"}
+{"type":"step","file":"resource_test.cdc","line":5}
+{"type":"resource_create","resource_type":"FlowToken.Vault","uuid":1001,"owner":"0x01","file":"resource_test.cdc","line":5}
+{"type":"step","file":"resource_test.cdc","line":10}
+{"type":"resource_move","resource_type":"FlowToken.Vault","uuid":1001,"from_owner":"0x01","to_owner":"0x02","file":"resource_test.cdc","line":10}
+{"type":"step","file":"resource_test.cdc","line":15}
+{"type":"resource_destroy","resource_type":"FlowToken.Vault","uuid":1001,"owner":"0x02","file":"resource_test.cdc","line":15}
+{"type":"return","value":"","cadence_type":"Void"}"#
+}
+
+/// Build NDJSON trace with nested resource operations.
+fn nested_resource_ndjson() -> &'static str {
+    r#"{"type":"call","name":"main"}
+{"type":"step","file":"nested_resource.cdc","line":3}
+{"type":"resource_create","resource_type":"NFT.Collection","uuid":2001,"owner":"0x10","file":"nested_resource.cdc","line":3}
+{"type":"step","file":"nested_resource.cdc","line":4}
+{"type":"resource_create","resource_type":"NFT.Token","uuid":2002,"owner":"0x10","file":"nested_resource.cdc","line":4}
+{"type":"step","file":"nested_resource.cdc","line":5}
+{"type":"resource_create","resource_type":"NFT.Token","uuid":2003,"owner":"0x10","file":"nested_resource.cdc","line":5}
+{"type":"step","file":"nested_resource.cdc","line":8}
+{"type":"resource_move","resource_type":"NFT.Collection","uuid":2001,"from_owner":"0x10","to_owner":"0x20","file":"nested_resource.cdc","line":8}
+{"type":"step","file":"nested_resource.cdc","line":9}
+{"type":"resource_move","resource_type":"NFT.Token","uuid":2002,"from_owner":"0x10","to_owner":"0x20","file":"nested_resource.cdc","line":9}
+{"type":"step","file":"nested_resource.cdc","line":12}
+{"type":"resource_destroy","resource_type":"NFT.Token","uuid":2003,"owner":"0x10","file":"nested_resource.cdc","line":12}
+{"type":"step","file":"nested_resource.cdc","line":13}
+{"type":"resource_destroy","resource_type":"NFT.Collection","uuid":2001,"owner":"0x20","file":"nested_resource.cdc","line":13}
+{"type":"return","value":"","cadence_type":"Void"}"#
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Parse resource lifecycle NDJSON events
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_parse_resource_lifecycle_events() {
+    let events = parse_ndjson(resource_lifecycle_ndjson()).expect("should parse resource NDJSON");
+
+    // Count resource events.
+    let create_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceCreate { .. })).count();
+    let move_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceMove { .. })).count();
+    let destroy_count = events.iter().filter(|e| matches!(e, TraceEvent::ResourceDestroy { .. })).count();
+
+    assert_eq!(create_count, 1, "should have 1 resource_create event");
+    assert_eq!(move_count, 1, "should have 1 resource_move event");
+    assert_eq!(destroy_count, 1, "should have 1 resource_destroy event");
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Convert resource events to trace output
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_convert_resource_events_to_trace() {
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let out_dir = tmp_dir.path().join("traces");
+    let source_path = PathBuf::from("resource_test.cdc");
+
+    run_tracer_from_ndjson(resource_lifecycle_ndjson(), &source_path, &out_dir);
+
+    let events = load_trace_events(&out_dir);
+
+    // Should have variable names with the @resource: prefix.
+    let var_names = collect_variable_names(&events);
+    let resource_vars: Vec<&String> = var_names
+        .iter()
+        .filter(|n| n.starts_with("@resource:"))
+        .collect();
+
+    assert!(
+        !resource_vars.is_empty(),
+        "trace should contain @resource: variable names, got: {:?}",
+        var_names
+    );
+
+    // Should contain FlowToken.Vault#1001.
+    let has_vault = resource_vars.iter().any(|n| n.contains("FlowToken.Vault#1001"));
+    assert!(has_vault, "should have @resource:FlowToken.Vault#1001, got: {:?}", resource_vars);
+
+    // Verify resource values contain lifecycle descriptions.
+    let string_values: Vec<String> = events
+        .iter()
+        .filter_map(|e| {
+            let val = e.get("Value")?;
+            let value = val.get("value")?;
+            if value.get("kind").and_then(|k| k.as_str()) == Some("String") {
+                value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    assert!(string_values.iter().any(|v| v.contains("created")), "should have 'created' value, got: {:?}", string_values);
+    assert!(string_values.iter().any(|v| v.contains("moved")), "should have 'moved' value, got: {:?}", string_values);
+    assert!(string_values.iter().any(|v| v.contains("destroyed")), "should have 'destroyed' value, got: {:?}", string_values);
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: Resource events also produce Step events at the correct lines
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resource_events_produce_steps() {
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let out_dir = tmp_dir.path().join("traces");
+    let source_path = PathBuf::from("resource_test.cdc");
+
+    run_tracer_from_ndjson(resource_lifecycle_ndjson(), &source_path, &out_dir);
+
+    let events = load_trace_events(&out_dir);
+
+    let step_lines: Vec<i64> = events
+        .iter()
+        .filter_map(|e| {
+            e.get("Step")
+                .and_then(|s| s.get("line"))
+                .and_then(|l| l.as_i64())
+        })
+        .collect();
+
+    // Resource events at lines 5, 10, 15 should produce steps (in addition
+    // to the explicit step events at those same lines from the NDJSON).
+    for line in &[5, 10, 15] {
+        assert!(
+            step_lines.contains(line),
+            "step events should include line {} (from resource event), got lines: {:?}",
+            line,
+            step_lines
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: Mixed resource and regular events don't break existing conversion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_mixed_resource_and_regular_events() {
+    let ndjson = r#"{"type":"call","name":"main"}
+{"type":"step","file":"mixed.cdc","line":2}
+{"type":"variable","name":"balance","value":"100","cadence_type":"Int"}
+{"type":"step","file":"mixed.cdc","line":3}
+{"type":"resource_create","resource_type":"FlowToken.Vault","uuid":5001,"owner":"0x01","file":"mixed.cdc","line":3}
+{"type":"step","file":"mixed.cdc","line":4}
+{"type":"variable","name":"amount","value":"50","cadence_type":"Int"}
+{"type":"step","file":"mixed.cdc","line":5}
+{"type":"resource_move","resource_type":"FlowToken.Vault","uuid":5001,"from_owner":"0x01","to_owner":"0x02","file":"mixed.cdc","line":5}
+{"type":"return","value":"50","cadence_type":"Int"}"#;
+
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let out_dir = tmp_dir.path().join("traces");
+    let source_path = PathBuf::from("mixed.cdc");
+
+    run_tracer_from_ndjson(ndjson, &source_path, &out_dir);
+
+    let events = load_trace_events(&out_dir);
+
+    // Regular variables should still work.
+    let var_names = collect_variable_names(&events);
+    assert!(var_names.contains(&"balance".to_string()), "should have 'balance' variable");
+    assert!(var_names.contains(&"amount".to_string()), "should have 'amount' variable");
+
+    // Resource variable should also appear.
+    let resource_vars: Vec<&String> = var_names
+        .iter()
+        .filter(|n| n.starts_with("@resource:"))
+        .collect();
+    assert!(!resource_vars.is_empty(), "should have resource variables");
+
+    // Regular int values should be present.
+    let int_values = collect_int_values(&events);
+    let all_ints: Vec<i64> = int_values.iter().map(|(_, v)| *v).collect();
+    assert!(all_ints.contains(&100), "should have value 100");
+    assert!(all_ints.contains(&50), "should have value 50");
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Nested resource tracking
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_nested_resource_tracking() {
+    let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
+    let out_dir = tmp_dir.path().join("traces");
+    let source_path = PathBuf::from("nested_resource.cdc");
+
+    run_tracer_from_ndjson(nested_resource_ndjson(), &source_path, &out_dir);
+
+    let events = load_trace_events(&out_dir);
+
+    let var_names = collect_variable_names(&events);
+    let resource_vars: Vec<&String> = var_names
+        .iter()
+        .filter(|n| n.starts_with("@resource:"))
+        .collect();
+
+    // Should track multiple resource types and UUIDs.
+    let has_collection = resource_vars.iter().any(|n| n.contains("NFT.Collection#2001"));
+    let has_token_2002 = resource_vars.iter().any(|n| n.contains("NFT.Token#2002"));
+    let has_token_2003 = resource_vars.iter().any(|n| n.contains("NFT.Token#2003"));
+
+    assert!(has_collection, "should track NFT.Collection#2001, got: {:?}", resource_vars);
+    assert!(has_token_2002, "should track NFT.Token#2002, got: {:?}", resource_vars);
+    assert!(has_token_2003, "should track NFT.Token#2003, got: {:?}", resource_vars);
+
+    // Verify the lifecycle values appear in correct order for collection:
+    // created, moved, destroyed.
+    let string_values: Vec<String> = events
+        .iter()
+        .filter_map(|e| {
+            let val = e.get("Value")?;
+            let value = val.get("value")?;
+            if value.get("kind").and_then(|k| k.as_str()) == Some("String") {
+                value.get("text").and_then(|v| v.as_str()).map(|s| s.to_string())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Count lifecycle events.
+    let created_count = string_values.iter().filter(|v| v.contains("created")).count();
+    let moved_count = string_values.iter().filter(|v| v.contains("moved")).count();
+    let destroyed_count = string_values.iter().filter(|v| v.contains("destroyed")).count();
+
+    assert_eq!(created_count, 3, "should have 3 created events (collection + 2 tokens)");
+    assert_eq!(moved_count, 2, "should have 2 moved events (collection + token)");
+    assert_eq!(destroyed_count, 2, "should have 2 destroyed events (token + collection)");
 }
 
 // ===========================================================================
