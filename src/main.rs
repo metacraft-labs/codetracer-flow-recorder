@@ -109,10 +109,7 @@ fn main() -> Result<()> {
         Commands::Record(args) => record(args),
         Commands::Replay(args) => replay(args),
         Commands::Version => {
-            println!(
-                "codetracer-flow-recorder {}",
-                env!("CARGO_PKG_VERSION")
-            );
+            println!("codetracer-flow-recorder {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
     }
@@ -161,10 +158,8 @@ fn replay(args: ReplayArgs) -> Result<()> {
         OutputFormat::Json => TraceEventsFileFormat::Json,
     };
 
-    let mut config = codetracer_flow_recorder::replay::ReplayConfig::new(
-        &args.tx_hash,
-        &args.access_node,
-    );
+    let mut config =
+        codetracer_flow_recorder::replay::ReplayConfig::new(&args.tx_hash, &args.access_node);
     if let Some(source_dir) = args.source_dir {
         config = config.with_source_dir(source_dir);
     }
