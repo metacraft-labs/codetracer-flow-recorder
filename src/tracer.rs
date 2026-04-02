@@ -165,7 +165,7 @@ impl CadenceTracer {
     /// 1. Shells out to the Go helper to execute the program and capture
     ///    NDJSON trace events.
     /// 2. Converts the trace events into CodeTracer format.
-    /// 3. Writes trace.bin, trace_metadata.json, trace_paths.json.
+    /// 3. Writes trace.json/trace.bin (depending on format), trace_metadata.json, trace_paths.json.
     pub fn trace_program(
         source_path: &Path,
         _source_code: &str,
@@ -188,7 +188,11 @@ impl CadenceTracer {
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-        let events_path = out_dir.join("trace.bin");
+        let events_filename = match format {
+            TraceEventsFileFormat::Json => "trace.json",
+            TraceEventsFileFormat::Binary | TraceEventsFileFormat::BinaryV0 => "trace.bin",
+        };
+        let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
         let paths_path = out_dir.join("trace_paths.json");
 
@@ -243,7 +247,11 @@ impl CadenceTracer {
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-        let events_path = out_dir.join("trace.bin");
+        let events_filename = match format {
+            TraceEventsFileFormat::Json => "trace.json",
+            TraceEventsFileFormat::Binary | TraceEventsFileFormat::BinaryV0 => "trace.bin",
+        };
+        let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
         let paths_path = out_dir.join("trace_paths.json");
 
@@ -700,7 +708,7 @@ mod tests {
         .expect("trace_program_from_events should succeed");
 
         // Verify output files exist and are non-empty.
-        for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
+        for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
             let path = out_dir.join(filename);
             assert!(path.exists(), "{} should exist", filename);
             let size = std::fs::metadata(&path).unwrap().len();
@@ -708,7 +716,7 @@ mod tests {
         }
 
         // Parse trace events and verify content.
-        let content = std::fs::read_to_string(out_dir.join("trace.bin")).unwrap();
+        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
         let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
         let trace_array = trace_events.as_array().unwrap();
 
@@ -812,7 +820,7 @@ mod tests {
         )
         .expect("should succeed");
 
-        let content = std::fs::read_to_string(out_dir.join("trace.bin")).unwrap();
+        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
         let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
         let trace_array = trace_events.as_array().unwrap();
 
