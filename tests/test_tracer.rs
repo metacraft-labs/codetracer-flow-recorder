@@ -68,7 +68,7 @@ fn run_tracer_on_file(source_path: &Path, out_dir: &Path) {
 
 /// Parse the trace events JSON from the output directory.
 fn load_trace_events(out_dir: &Path) -> Vec<serde_json::Value> {
-    let events_path = out_dir.join("trace.bin");
+    let events_path = out_dir.join("trace.json");
     let content = std::fs::read_to_string(&events_path).expect("failed to read trace events");
     let events: serde_json::Value =
         serde_json::from_str(&content).expect("trace events should be valid JSON");
@@ -151,14 +151,14 @@ fn test_ndjson_trace_output_files() {
     run_tracer_from_ndjson(flow_test_ndjson(), &source_path, &out_dir);
 
     // Verify the three output files exist and are non-empty.
-    for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
+    for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
         let path = out_dir.join(filename);
         assert!(path.exists(), "{} should exist", filename);
         let size = std::fs::metadata(&path).unwrap().len();
         assert!(size > 0, "{} should be non-empty", filename);
     }
 
-    // trace.bin should be valid JSON containing an array of events.
+    // trace.json should be valid JSON containing an array of events.
     let events = load_trace_events(&out_dir);
     assert!(!events.is_empty(), "trace should have at least one event");
 
@@ -720,7 +720,7 @@ fn test_go_helper_compile_and_run() {
     let source_path = test_programs_dir().join("flow_test.cdc");
     run_tracer_on_file(&source_path, &out_dir);
 
-    for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
+    for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
         let path = out_dir.join(filename);
         assert!(path.exists(), "{} should exist", filename);
         let size = std::fs::metadata(&path).unwrap().len();
@@ -828,7 +828,7 @@ fn test_go_helper_cli_record() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    assert!(out_dir.join("trace.bin").exists());
+    assert!(out_dir.join("trace.json").exists());
     assert!(out_dir.join("trace_metadata.json").exists());
     assert!(out_dir.join("trace_paths.json").exists());
 

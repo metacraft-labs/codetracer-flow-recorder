@@ -300,7 +300,7 @@ mod tests {
         .expect("trace_program_from_events should succeed");
 
         // Verify output files exist.
-        for filename in &["trace.bin", "trace_metadata.json", "trace_paths.json"] {
+        for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
             let path = out_dir.join(filename);
             assert!(path.exists(), "{} should exist", filename);
             let size = std::fs::metadata(&path).unwrap().len();
@@ -308,7 +308,7 @@ mod tests {
         }
 
         // Verify trace content has expected variable names.
-        let content = std::fs::read_to_string(out_dir.join("trace.bin")).unwrap();
+        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
         let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
         let trace_array = trace_events.as_array().unwrap();
 
