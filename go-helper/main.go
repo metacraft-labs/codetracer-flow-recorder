@@ -20,39 +20,25 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/onflow/cadence"
 	"github.com/onflow/cadence/common"
 	"github.com/onflow/cadence/interpreter"
-	jsoncdc "github.com/onflow/cadence/encoding/json"
+	"github.com/onflow/cadence/runtime"
+	runtime_utils "github.com/onflow/cadence/test_utils/runtime_utils"
 )
 
 // TraceEvent represents a single NDJSON trace line.
 type TraceEvent struct {
-	Type         string `json:"type"`
-	File         string `json:"file,omitempty"`
-	Line         int    `json:"line,omitempty"`
-	Name         string `json:"name,omitempty"`
-	Value        string `json:"value,omitempty"`
-	CadenceType  string `json:"cadence_type,omitempty"`
-	ResourceType string `json:"resource_type,omitempty"`
-	UUID         uint64 `json:"uuid,omitempty"`
-	Owner        string `json:"owner,omitempty"`
-	FromOwner    string `json:"from_owner,omitempty"`
-	ToOwner      string `json:"to_owner,omitempty"`
-}
-
-// TracerConfig holds configuration for resource tracking.
-type TracerConfig struct {
-	// ResourceOwnerChangeHandlerEnabled enables resource lifecycle event emission.
-	ResourceOwnerChangeHandlerEnabled bool
+	Type        string `json:"type"`
+	File        string `json:"file,omitempty"`
+	Line        int    `json:"line,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Value       string `json:"value,omitempty"`
+	CadenceType string `json:"cadence_type,omitempty"`
 }
 
 var (
 	encoder    *json.Encoder
 	sourceFile string
-	tracerConfig = TracerConfig{
-		ResourceOwnerChangeHandlerEnabled: true,
-	}
 )
 
 func emit(event TraceEvent) {
@@ -62,18 +48,11 @@ func emit(event TraceEvent) {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: cadence-trace-helper <source-file.cdc>\n")
-		fmt.Fprintf(os.Stderr, "       cadence-trace-helper replay --tx-hash <hash> --access-node <url> [--source-dir <dir>]\n")
 		os.Exit(1)
 	}
 
 	encoder = json.NewEncoder(os.Stdout)
 	encoder.SetEscapeHTML(false)
-
-	// Check if we are in replay mode.
-	if os.Args[1] == "replay" {
-		runReplayMode(os.Args[2:])
-		return
-	}
 
 	sourceFile = os.Args[1]
 	absPath, err := filepath.Abs(sourceFile)
@@ -87,10 +66,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	source := string(sourceBytes)
+	source := sourceBytes
 
-	// Execute the Cadence script using the interpreter directly.
-	// The Cadence v1.x API uses an interpreter-based approach.
 	err = executeAndTrace(source)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cadence execution error: %v\n", err)
@@ -98,192 +75,107 @@ func main() {
 	}
 }
 
-// emitResourceCreate emits a resource_create NDJSON event.
-func emitResourceCreate(resourceType string, uuid uint64, owner string, file string, line int) {
-	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
-		return
+func executeAndTrace(source []byte) error {
+	// Create a Debugger that will pause at every statement.
+	debugger := interpreter.NewDebugger()
+
+	// Set up the runtime with the debugger attached.
+	config := runtime.Config{
+		Debugger: debugger,
 	}
-	emit(TraceEvent{
-		Type:         "resource_create",
-		ResourceType: resourceType,
-		UUID:         uuid,
-		Owner:        owner,
-		File:         file,
-		Line:         line,
-	})
-}
+	rt := runtime.NewInterpreterRuntime(config)
 
-// emitResourceMove emits a resource_move NDJSON event when ownership changes.
-func emitResourceMove(resourceType string, uuid uint64, fromOwner string, toOwner string, file string, line int) {
-	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
-		return
+	// Use the test runtime interface which provides a minimal environment
+	// suitable for script execution (no on-chain state needed).
+	location := common.ScriptLocation{0x1}
+	runtimeInterface := &runtime_utils.TestRuntimeInterface{
+		Storage: runtime_utils.NewTestLedger(nil, nil),
+		OnGetCode: func(loc runtime.Location) ([]byte, error) {
+			return source, nil
+		},
 	}
-	emit(TraceEvent{
-		Type:         "resource_move",
-		ResourceType: resourceType,
-		UUID:         uuid,
-		FromOwner:    fromOwner,
-		ToOwner:      toOwner,
-		File:         file,
-		Line:         line,
-	})
-}
 
-// emitResourceDestroy emits a resource_destroy NDJSON event.
-func emitResourceDestroy(resourceType string, uuid uint64, owner string, file string, line int) {
-	if !tracerConfig.ResourceOwnerChangeHandlerEnabled {
-		return
+	ctx := runtime.Context{
+		Interface: runtimeInterface,
+		Location:  location,
 	}
-	emit(TraceEvent{
-		Type:         "resource_destroy",
-		ResourceType: resourceType,
-		UUID:         uuid,
-		Owner:        owner,
-		File:         file,
-		Line:         line,
-	})
-}
 
-// runReplayMode handles the "replay" subcommand.
-// It parses --tx-hash, --access-node, and optional --source-dir flags,
-// fetches the transaction from the Flow Access API, and executes its
-// Cadence script through the emulator with tracing hooks.
-func runReplayMode(args []string) {
-	var txHash, accessNode, sourceDir string
+	// Request an immediate pause so the debugger stops at the first statement.
+	debugger.RequestPause()
 
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case "--tx-hash":
-			if i+1 < len(args) {
-				i++
-				txHash = args[i]
+	// Run the script in a goroutine since ExecuteScript blocks until completion.
+	// When execution finishes, the goroutine closes the done channel.
+	type execResultT struct {
+		value interface{}
+		err   error
+	}
+	resultCh := make(chan execResultT, 1)
+
+	go func() {
+		val, err := rt.ExecuteScript(runtime.Script{Source: source}, ctx)
+		resultCh <- execResultT{val, err}
+	}()
+
+	// Read the first stop from the Stops() channel.
+	// The Debugger.onStatement method sends a Stop to the stops channel
+	// whenever the runtime hits a statement and a pause was requested.
+	// After processing, we call Continue() then RequestPause() to step
+	// through each statement.
+	stops := debugger.Stops()
+	for {
+		var stop interpreter.Stop
+		select {
+		case stop = <-stops:
+			// Got a stop from the debugger.
+		case result := <-resultCh:
+			// Execution finished — no more stops to process.
+			if result.value != nil {
+				emit(TraceEvent{
+					Type:  "return",
+					Value: fmt.Sprintf("%v", result.value),
+				})
 			}
-		case "--access-node":
-			if i+1 < len(args) {
-				i++
-				accessNode = args[i]
-			}
-		case "--source-dir":
-			if i+1 < len(args) {
-				i++
-				sourceDir = args[i]
+			return result.err
+		}
+
+		stmt := stop.Statement
+		pos := stmt.StartPosition()
+
+		emit(TraceEvent{
+			Type: "step",
+			File: sourceFile,
+			Line: pos.Line,
+		})
+
+		// Extract local variables from the current activation.
+		activation := debugger.CurrentActivation(stop.Interpreter)
+		if activation != nil {
+			for name, variable := range activation.FunctionValues() {
+				val := variable.GetValue(stop.Interpreter)
+				if val != nil {
+					cadenceVal, err := runtime.ExportValue(
+						val,
+						stop.Interpreter,
+						interpreter.EmptyLocationRange,
+					)
+					valueStr := fmt.Sprintf("%v", val)
+					typeStr := ""
+					if err == nil && cadenceVal != nil {
+						typeStr = cadenceVal.Type().ID()
+					}
+					emit(TraceEvent{
+						Type:        "variable",
+						Name:        name,
+						Value:       valueStr,
+						CadenceType: typeStr,
+					})
+				}
 			}
 		}
+
+		// Request another pause and continue execution so we stop at
+		// the next statement.
+		debugger.RequestPause()
+		debugger.Continue()
 	}
-
-	if txHash == "" {
-		fmt.Fprintf(os.Stderr, "replay: --tx-hash is required\n")
-		os.Exit(1)
-	}
-	if accessNode == "" {
-		accessNode = "access.mainnet.nodes.onflow.org:9000"
-	}
-
-	err := replayTransaction(txHash, accessNode, sourceDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "replay error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-// replayTransaction fetches a transaction from the Flow Access API and
-// replays its Cadence script with tracing enabled.
-//
-// TODO(M5): This is a stub implementation. The full version will:
-//   - Use flow-go-sdk to connect to the Access Node via gRPC
-//   - Fetch the transaction by hash using client.GetTransaction()
-//   - Extract the Cadence script and arguments
-//   - Set up the Flow emulator in fork mode at the transaction's block height
-//   - Execute the script through the emulator with tracing hooks
-//
-// For now, it emits an error indicating that the transaction fetch is not yet
-// connected to the real Access API.
-func replayTransaction(txHash string, accessNode string, sourceDir string) error {
-	_ = sourceDir // Will be used for source mapping in the full implementation.
-
-	// Set the sourceFile for trace events.
-	sourceFile = fmt.Sprintf("tx_%s.cdc", txHash)
-
-	fmt.Fprintf(os.Stderr, "replay: fetching transaction %s from %s\n", txHash, accessNode)
-
-	// TODO(M5): Replace this stub with real Access API calls:
-	//
-	//   import "github.com/onflow/flow-go-sdk/access/grpc"
-	//
-	//   client, err := grpc.NewClient(accessNode)
-	//   tx, err := client.GetTransaction(ctx, flow.HexToID(txHash))
-	//   script := string(tx.Script)
-	//   args := tx.Arguments
-	//
-	// Then execute the script through the emulator in fork mode and trace it.
-
-	return fmt.Errorf(
-		"replay mode is not yet fully implemented: "+
-			"transaction fetch from Access API requires flow-go-sdk integration (tx=%s, node=%s)",
-		txHash, accessNode,
-	)
-}
-
-func executeAndTrace(source string) error {
-	// For Cadence v1.x, we use the interpreter package directly.
-	// The runtime.ExecuteScript API requires a full runtime interface;
-	// for tracing purposes, we set up a minimal checker+interpreter pipeline.
-
-	// Parse and check the program.
-	location := common.ScriptLocation{0x1}
-
-	// Use the Cadence standard library checker and interpreter.
-	// This is a simplified approach; a production version would set up
-	// the full runtime pipeline with OnStatement/OnFunctionInvocation hooks.
-	program, err := cadence.NewProgram(source, location)
-	if err != nil {
-		return fmt.Errorf("failed to parse/check program: %w", err)
-	}
-
-	// Set up interpreter with tracing hooks.
-	inter, err := program.NewInterpreter(
-		interpreter.WithOnStatementHandler(func(
-			inter *interpreter.Interpreter,
-			statement interpreter.Statement,
-			location common.Location,
-		) {
-			pos := statement.StartPosition()
-			emit(TraceEvent{
-				Type: "step",
-				File: sourceFile,
-				Line: pos.Line,
-			})
-		}),
-		interpreter.WithOnFunctionInvocationHandler(func(
-			inter *interpreter.Interpreter,
-			functionType *interpreter.FunctionStaticType,
-		) {
-			emit(TraceEvent{
-				Type: "call",
-				Name: "function",
-			})
-		}),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to create interpreter: %w", err)
-	}
-
-	// Execute.
-	value, err := inter.Invoke("main")
-	if err != nil {
-		return fmt.Errorf("failed to invoke main: %w", err)
-	}
-
-	// Emit the final return value.
-	if value != nil {
-		cadenceValue := interpreter.ExportValue(value, inter, interpreter.EmptyLocationRange)
-		jsonBytes, _ := jsoncdc.Encode(cadenceValue)
-		emit(TraceEvent{
-			Type:        "return",
-			Value:       fmt.Sprintf("%v", value),
-			CadenceType: string(jsonBytes),
-		})
-	}
-
-	return nil
 }
