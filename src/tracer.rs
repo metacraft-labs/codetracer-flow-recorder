@@ -116,8 +116,12 @@ const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
 /// Run the Go helper binary on a Cadence source file and return the parsed
 /// NDJSON trace events.
 pub fn run_go_helper(source_path: &Path) -> Result<Vec<TraceEvent>> {
-    let helper_bin =
-        std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
+    let helper_bin = std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| {
+        // Fall back to the binary built by build.rs (if available).
+        option_env!("CADENCE_HELPER_BIN_BUILT")
+            .unwrap_or(DEFAULT_HELPER_BIN)
+            .to_string()
+    });
 
     let output = Command::new(&helper_bin)
         .arg(source_path)
