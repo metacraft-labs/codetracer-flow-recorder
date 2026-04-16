@@ -41,7 +41,8 @@ pub enum TraceEvent {
     Call { name: String },
     #[serde(rename = "return")]
     Return {
-        value: String,
+        #[serde(default)]
+        value: Option<String>,
         #[serde(default)]
         cadence_type: Option<String>,
     },
@@ -344,17 +345,22 @@ impl CadenceTracer {
                         .copied()
                         .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
 
-                    if value.is_empty() || value == "nil" || value == "Void" {
-                        TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
-                    } else if let Ok(i) = value.parse::<i64>() {
-                        let val = ValueRecord::Int { i, type_id };
-                        TraceWriter::register_return(&mut *self.writer, val);
-                    } else {
-                        let val = ValueRecord::String {
-                            text: value.clone(),
-                            type_id,
-                        };
-                        TraceWriter::register_return(&mut *self.writer, val);
+                    match value.as_deref() {
+                        None | Some("") | Some("nil") | Some("Void") => {
+                            TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
+                        }
+                        Some(v) => {
+                            if let Ok(i) = v.parse::<i64>() {
+                                let val = ValueRecord::Int { i, type_id };
+                                TraceWriter::register_return(&mut *self.writer, val);
+                            } else {
+                                let val = ValueRecord::String {
+                                    text: v.to_string(),
+                                    type_id,
+                                };
+                                TraceWriter::register_return(&mut *self.writer, val);
+                            }
+                        }
                     }
                 }
 
@@ -530,7 +536,7 @@ mod tests {
         assert_eq!(
             events[0],
             TraceEvent::Return {
-                value: "94".to_string(),
+                value: Some("94".to_string()),
                 cadence_type: Some("Int".to_string()),
             }
         );
@@ -567,7 +573,7 @@ mod tests {
         assert_eq!(
             events[12],
             TraceEvent::Return {
-                value: "94".to_string(),
+                value: Some("94".to_string()),
                 cadence_type: Some("Int".to_string()),
             }
         );
