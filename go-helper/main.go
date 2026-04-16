@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/onflow/cadence/common"
 	"github.com/onflow/cadence/interpreter"
@@ -43,6 +44,70 @@ var (
 
 func emit(event TraceEvent) {
 	_ = encoder.Encode(event)
+}
+
+// buildFunctionMap parses the source to create a mapping from line number
+// to the enclosing function name. This handles Cadence's "fun <name>"
+// declarations. Lines not inside any function map to "main".
+func buildFunctionMap(source []byte) map[int]string {
+	lines := strings.Split(string(source), "\n")
+	result := make(map[int]string)
+
+	type funcRange struct {
+		name       string
+		startLine  int
+		braceDepth int
+	}
+
+	var stack []funcRange
+	braceDepth := 0
+
+	for lineNum, line := range lines {
+		lineNo := lineNum + 1 // 1-based
+		trimmed := strings.TrimSpace(line)
+
+		// Check for function declaration
+		if idx := strings.Index(trimmed, "fun "); idx >= 0 {
+			rest := trimmed[idx+4:]
+			name := ""
+			for _, ch := range rest {
+				if ch == '(' || ch == ':' || ch == ' ' || ch == '{' {
+					break
+				}
+				name += string(ch)
+			}
+			if name != "" {
+				// Push function with the current brace depth (before counting this line)
+				stack = append(stack, funcRange{
+					name:       name,
+					startLine:  lineNo,
+					braceDepth: braceDepth,
+				})
+			}
+		}
+
+		// Count braces on this line
+		for _, ch := range line {
+			if ch == '{' {
+				braceDepth++
+			} else if ch == '}' {
+				braceDepth--
+				// Check if we're closing a function
+				if len(stack) > 0 && braceDepth == stack[len(stack)-1].braceDepth {
+					stack = stack[:len(stack)-1]
+				}
+			}
+		}
+
+		// Assign the current function name to this line
+		if len(stack) > 0 {
+			result[lineNo] = stack[len(stack)-1].name
+		} else {
+			result[lineNo] = "main"
+		}
+	}
+
+	return result
 }
 
 func main() {
@@ -116,11 +181,18 @@ func executeAndTrace(source []byte) error {
 		resultCh <- execResultT{val, err}
 	}()
 
+	// Track which function we're in by source line analysis.
+	// The Cadence debugger's activation depth doesn't change between
+	// function calls in all cases, so we detect function transitions
+	// by watching for the source line to jump into a different function's
+	// body (i.e., the line is within a different "fun" declaration).
+	prevFuncName := ""
+	var callStack []string
+
+	// Pre-parse source to build a line→function map.
+	funcMap := buildFunctionMap(source)
+
 	// Read the first stop from the Stops() channel.
-	// The Debugger.onStatement method sends a Stop to the stops channel
-	// whenever the runtime hits a statement and a pause was requested.
-	// After processing, we call Continue() then RequestPause() to step
-	// through each statement.
 	stops := debugger.Stops()
 	for {
 		var stop interpreter.Stop
@@ -128,7 +200,11 @@ func executeAndTrace(source []byte) error {
 		case stop = <-stops:
 			// Got a stop from the debugger.
 		case result := <-resultCh:
-			// Execution finished — no more stops to process.
+			// Execution finished — emit returns for remaining stack frames.
+			for len(callStack) > 0 {
+				emit(TraceEvent{Type: "return"})
+				callStack = callStack[:len(callStack)-1]
+			}
 			if result.value != nil {
 				emit(TraceEvent{
 					Type:  "return",
@@ -138,8 +214,50 @@ func executeAndTrace(source []byte) error {
 			return result.err
 		}
 
+		activation := debugger.CurrentActivation(stop.Interpreter)
+
 		stmt := stop.Statement
 		pos := stmt.StartPosition()
+		currentFunc := funcMap[pos.Line]
+		if currentFunc == "" {
+			currentFunc = "main"
+		}
+
+		// Detect function transitions by comparing the current function
+		// name (derived from source line) with the previous one.
+		if currentFunc != prevFuncName {
+			if prevFuncName == "" {
+				// First statement — emit the initial function call.
+				emit(TraceEvent{
+					Type: "call",
+					Name: currentFunc,
+				})
+				callStack = append(callStack, currentFunc)
+			} else {
+				// Check if we're returning to a function already on the stack.
+				returning := false
+				for i := len(callStack) - 2; i >= 0; i-- {
+					if callStack[i] == currentFunc {
+						// Pop the call stack back to this function.
+						for len(callStack) > 0 && callStack[len(callStack)-1] != currentFunc {
+							emit(TraceEvent{Type: "return"})
+							callStack = callStack[:len(callStack)-1]
+						}
+						returning = true
+						break
+					}
+				}
+				if !returning {
+					// Entering a new function — emit call.
+					emit(TraceEvent{
+						Type: "call",
+						Name: currentFunc,
+					})
+					callStack = append(callStack, currentFunc)
+				}
+			}
+			prevFuncName = currentFunc
+		}
 
 		emit(TraceEvent{
 			Type: "step",
@@ -148,7 +266,6 @@ func executeAndTrace(source []byte) error {
 		})
 
 		// Extract local variables from the current activation.
-		activation := debugger.CurrentActivation(stop.Interpreter)
 		if activation != nil {
 			for name, variable := range activation.FunctionValues() {
 				val := variable.GetValue(stop.Interpreter)
