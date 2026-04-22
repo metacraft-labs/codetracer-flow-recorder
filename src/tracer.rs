@@ -195,7 +195,9 @@ impl CadenceTracer {
 
         let events_filename = match format {
             TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary | TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Ctfs => "trace.bin",
+            TraceEventsFileFormat::Binary
+            | TraceEventsFileFormat::BinaryV0
+            | TraceEventsFileFormat::Ctfs => "trace.bin",
         };
         let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
@@ -254,7 +256,9 @@ impl CadenceTracer {
 
         let events_filename = match format {
             TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary | TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Ctfs => "trace.bin",
+            TraceEventsFileFormat::Binary
+            | TraceEventsFileFormat::BinaryV0
+            | TraceEventsFileFormat::Ctfs => "trace.bin",
         };
         let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
