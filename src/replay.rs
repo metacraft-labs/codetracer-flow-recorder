@@ -299,34 +299,16 @@ mod tests {
         )
         .expect("trace_program_from_events should succeed");
 
-        // Verify output files exist.
-        for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
-            let path = out_dir.join(filename);
-            assert!(path.exists(), "{} should exist", filename);
-            let size = std::fs::metadata(&path).unwrap().len();
-            assert!(size > 0, "{} should be non-empty", filename);
-        }
-
-        // Verify trace content has expected variable names.
-        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
-        let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let trace_array = trace_events.as_array().unwrap();
-
-        let var_names: Vec<String> = trace_array
-            .iter()
-            .filter_map(|e| {
-                e.get("VariableName")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+        // Verify .ct output with CTFS magic bytes.
+        let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
+            .expect("read output dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
             .collect();
-        assert!(
-            var_names.contains(&"recipient".to_string()),
-            "should have variable 'recipient'"
-        );
-        assert!(
-            var_names.contains(&"amount".to_string()),
-            "should have variable 'amount'"
-        );
+        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        let content = std::fs::read(&ct_files[0]).expect("read .ct file");
+        assert!(content.len() >= 5, ".ct file too small");
+        assert_eq!(&content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
     }
 }

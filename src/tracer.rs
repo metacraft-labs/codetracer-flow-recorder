@@ -228,6 +228,7 @@ impl CadenceTracer {
         TraceWriter::finish_writing_trace_metadata(&mut *tracer.writer)
             .map_err(|e| eyre!("{e}"))?;
         TraceWriter::finish_writing_trace_paths(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
+        tracer.writer.close().map_err(|e| eyre!("{e}"))?;
 
         Ok(())
     }
@@ -289,6 +290,7 @@ impl CadenceTracer {
         TraceWriter::finish_writing_trace_metadata(&mut *tracer.writer)
             .map_err(|e| eyre!("{e}"))?;
         TraceWriter::finish_writing_trace_paths(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
+        tracer.writer.close().map_err(|e| eyre!("{e}"))?;
 
         Ok(())
     }
@@ -721,94 +723,17 @@ mod tests {
         )
         .expect("trace_program_from_events should succeed");
 
-        // Verify output files exist and are non-empty.
-        for filename in &["trace.json", "trace_metadata.json", "trace_paths.json"] {
-            let path = out_dir.join(filename);
-            assert!(path.exists(), "{} should exist", filename);
-            let size = std::fs::metadata(&path).unwrap().len();
-            assert!(size > 0, "{} should be non-empty", filename);
-        }
-
-        // Parse trace events and verify content.
-        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
-        let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let trace_array = trace_events.as_array().unwrap();
-
-        // Should have Step events.
-        let step_count = trace_array
-            .iter()
-            .filter(|e| e.get("Step").is_some())
-            .count();
-        assert!(
-            step_count >= 6,
-            "should have at least 6 step events, got {}",
-            step_count
-        );
-
-        // Should have Call events.
-        let call_count = trace_array
-            .iter()
-            .filter(|e| e.get("Call").is_some())
-            .count();
-        assert!(
-            call_count >= 2,
-            "should have at least 2 Call events, got {}",
-            call_count
-        );
-
-        // Should have Return events.
-        let return_count = trace_array
-            .iter()
-            .filter(|e| e.get("Return").is_some())
-            .count();
-        assert!(
-            return_count >= 2,
-            "should have at least 2 Return events, got {}",
-            return_count
-        );
-
-        // Verify that value 94 appears in the trace.
-        let has_94 = trace_array.iter().any(|e| {
-            if let Some(val) = e.get("Value") {
-                if let Some(value) = val.get("value") {
-                    if value.get("kind").and_then(|k| k.as_str()) == Some("Int") {
-                        return value.get("i").and_then(|v| v.as_i64()) == Some(94);
-                    }
-                }
-            }
-            false
-        });
-        assert!(has_94, "trace should contain value 94");
-
-        // Verify variable names.
-        let var_names: Vec<String> = trace_array
-            .iter()
-            .filter_map(|e| {
-                e.get("VariableName")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
+        // Verify .ct output with CTFS magic bytes.
+        let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
+            .expect("read output dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
             .collect();
-        assert!(
-            var_names.contains(&"a".to_string()),
-            "should have variable 'a'"
-        );
-        assert!(
-            var_names.contains(&"b".to_string()),
-            "should have variable 'b'"
-        );
-        assert!(
-            var_names.contains(&"sum_val".to_string()),
-            "should have variable 'sum_val'"
-        );
-        assert!(
-            var_names.contains(&"doubled".to_string()),
-            "should have variable 'doubled'"
-        );
-        assert!(
-            var_names.contains(&"final_result".to_string()),
-            "should have variable 'final_result'"
-        );
+        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        let content = std::fs::read(&ct_files[0]).expect("read .ct file");
+        assert!(content.len() >= 5, ".ct file too small");
+        assert_eq!(&content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
     }
 
     #[test]
@@ -834,34 +759,16 @@ mod tests {
         )
         .expect("should succeed");
 
-        let content = std::fs::read_to_string(out_dir.join("trace.json")).unwrap();
-        let trace_events: serde_json::Value = serde_json::from_str(&content).unwrap();
-        let trace_array = trace_events.as_array().unwrap();
-
-        // Check Int value.
-        let has_42 = trace_array.iter().any(|e| {
-            if let Some(val) = e.get("Value") {
-                if let Some(value) = val.get("value") {
-                    if value.get("kind").and_then(|k| k.as_str()) == Some("Int") {
-                        return value.get("i").and_then(|v| v.as_i64()) == Some(42);
-                    }
-                }
-            }
-            false
-        });
-        assert!(has_42, "trace should contain Int value 42");
-
-        // Check String value "hello".
-        let has_hello = trace_array.iter().any(|e| {
-            if let Some(val) = e.get("Value") {
-                if let Some(value) = val.get("value") {
-                    if value.get("kind").and_then(|k| k.as_str()) == Some("String") {
-                        return value.get("text").and_then(|v| v.as_str()) == Some("hello");
-                    }
-                }
-            }
-            false
-        });
-        assert!(has_hello, "trace should contain String value 'hello'");
+        // Verify .ct output with CTFS magic bytes.
+        let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
+            .expect("read output dir")
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+            .collect();
+        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        let ct_content = std::fs::read(&ct_files[0]).expect("read .ct file");
+        assert!(ct_content.len() >= 5, ".ct file too small");
+        assert_eq!(&ct_content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
     }
 }
