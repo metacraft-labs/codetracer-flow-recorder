@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer, TraceEvent};
-use codetracer_trace_writer::TraceEventsFileFormat;
+use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 // ---------------------------------------------------------------------------
 // Helpers
