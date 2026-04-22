@@ -50,13 +50,13 @@ fn run_tracer_from_ndjson(ndjson: &str, source_path: &Path, out_dir: &Path) {
         source_path,
         &events,
         out_dir,
-        TraceEventsFileFormat::Json,
+        TraceEventsFileFormat::Binary,
     )
     .expect("trace_program_from_events should succeed");
 }
 
 fn run_tracer_on_file(source_path: &Path, out_dir: &Path) {
-    codetracer_flow_recorder::recorder::record(source_path, out_dir, TraceEventsFileFormat::Json)
+    codetracer_flow_recorder::recorder::record(source_path, out_dir, TraceEventsFileFormat::Binary)
         .expect("trace_program should succeed");
 }
 
