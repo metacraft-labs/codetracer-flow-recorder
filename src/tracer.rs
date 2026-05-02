@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use codetracer_trace_types::{Line, TypeKind, ValueRecord, NONE_VALUE};
+use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord, NONE_VALUE};
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
 use eyre::{eyre, Context, Result};
@@ -382,6 +382,7 @@ impl CadenceTracer {
                     TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
 
                     // Emit the resource as a variable with special naming convention.
+                    // Variable form survives in the locals pane.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
                     let type_id = self.ensure_resource_type(resource_type);
                     let val = ValueRecord::String {
@@ -392,6 +393,16 @@ impl CadenceTracer {
                         &mut *self.writer,
                         &var_name,
                         val,
+                    );
+
+                    // Route through the structured event log too so the multi-stream
+                    // IO event reader captures the resource lifecycle, not just the
+                    // locals pane.  Mirrors Move 1.46's External-effect routing.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("CadenceResourceCreate:{}#{}", resource_type, uuid),
+                        &format!("owner={}", owner),
                     );
                 }
 
@@ -418,6 +429,14 @@ impl CadenceTracer {
                         &var_name,
                         val,
                     );
+
+                    // Structured-event mirror (see ResourceCreate above).
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("CadenceResourceMove:{}#{}", resource_type, uuid),
+                        &format!("from={} to={}", from_owner, to_owner),
+                    );
                 }
 
                 TraceEvent::ResourceDestroy {
@@ -441,6 +460,14 @@ impl CadenceTracer {
                         &mut *self.writer,
                         &var_name,
                         val,
+                    );
+
+                    // Structured-event mirror (see ResourceCreate above).
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("CadenceResourceDestroy:{}#{}", resource_type, uuid),
+                        &format!("owner={}", owner),
                     );
                 }
             }
