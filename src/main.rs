@@ -9,7 +9,7 @@
 //! ```text
 //! codetracer-flow-recorder record <cdc-file> \
 //!     --out-dir <output-dir> \
-//!     [--format binary|json]
+//!     [--format ctfs|binary|json]
 //! ```
 
 use std::path::PathBuf;
@@ -54,10 +54,36 @@ enum Commands {
     Version,
 }
 
-#[derive(Debug, Clone, ValueEnum)]
+/// Output format for the recorded trace.
+///
+/// `Ctfs` is the canonical CodeTracer multi-stream container — a single `.ct`
+/// file consumed by the Nim `ct_reader_*` FFI and the db-backend's
+/// `CTFSTraceReader`.  This is the recommended format and the default.
+///
+/// `Binary` is the legacy CBOR + Zstd events file (`trace.bin` +
+/// `trace_metadata.json` + `trace_paths.json`); kept for backwards
+/// compatibility with older readers that have not been migrated to CTFS.
+///
+/// `Json` is the human-readable variant of the legacy format; useful for
+/// debugging the recorder itself.
+#[derive(Debug, Clone, Copy, ValueEnum)]
 enum OutputFormat {
+    /// Canonical CodeTracer multi-stream container (recommended).
+    Ctfs,
+    /// Legacy CBOR + Zstd binary format.
     Binary,
+    /// Human-readable JSON (slower; useful for debugging).
     Json,
+}
+
+impl From<OutputFormat> for TraceEventsFileFormat {
+    fn from(f: OutputFormat) -> Self {
+        match f {
+            OutputFormat::Ctfs => TraceEventsFileFormat::Ctfs,
+            OutputFormat::Binary => TraceEventsFileFormat::Binary,
+            OutputFormat::Json => TraceEventsFileFormat::Json,
+        }
+    }
 }
 
 #[derive(Debug, clap::Args)]
@@ -79,7 +105,7 @@ struct ReplayArgs {
     out_dir: PathBuf,
 
     /// Output format for the trace data.
-    #[arg(short = 'f', long, default_value = "binary")]
+    #[arg(short = 'f', long, default_value = "ctfs")]
     format: OutputFormat,
 }
 
@@ -95,7 +121,7 @@ struct RecordArgs {
     out_dir: PathBuf,
 
     /// Output format for the trace data.
-    #[arg(short = 'f', long, default_value = "binary")]
+    #[arg(short = 'f', long, default_value = "ctfs")]
     format: OutputFormat,
 }
 
@@ -129,10 +155,7 @@ fn record(args: RecordArgs) -> Result<()> {
 
     eprintln!("Source file: {}", source_path.display());
 
-    let format = match args.format {
-        OutputFormat::Binary => TraceEventsFileFormat::Binary,
-        OutputFormat::Json => TraceEventsFileFormat::Json,
-    };
+    let format: TraceEventsFileFormat = args.format.into();
 
     // 2. Create the output directory
     let out_dir = &args.out_dir;
@@ -153,10 +176,7 @@ fn record(args: RecordArgs) -> Result<()> {
 
 /// Execute the `replay` subcommand.
 fn replay(args: ReplayArgs) -> Result<()> {
-    let format = match args.format {
-        OutputFormat::Binary => TraceEventsFileFormat::Binary,
-        OutputFormat::Json => TraceEventsFileFormat::Json,
-    };
+    let format: TraceEventsFileFormat = args.format.into();
 
     let mut config =
         codetracer_flow_recorder::replay::ReplayConfig::new(&args.tx_hash, &args.access_node);
