@@ -10,6 +10,8 @@
 //! * Resource lifecycle events (create / move / destroy) complete the
 //!   `register_special_event` route without crashing the converter and the
 //!   `.ct` container is materially populated.
+//! * Cadence runtime errors emitted by the Go helper as final `error` NDJSON
+//!   records complete the `EventLogKind::Error` route.
 //!
 //! The structural assertions here are deliberately lightweight (CTFS
 //! magic + file size) — verifying the embedded event-log content end-to-end
@@ -95,7 +97,10 @@ fn test_ctfs_writer_produces_ct_container() {
     let ct = first_ct_file(&out_dir);
     assert_ctfs_magic(&ct);
     let size = std::fs::metadata(&ct).unwrap().len();
-    assert!(size > 100, ".ct should be materially populated, got {size} bytes");
+    assert!(
+        size > 100,
+        ".ct should be materially populated, got {size} bytes"
+    );
 }
 
 #[test]
@@ -215,5 +220,36 @@ fn test_steps_emitted_for_variable_assignments() {
     assert!(
         size > 100,
         ".ct should be materially populated for a 3-variable program, got {size} bytes"
+    );
+}
+
+#[test]
+fn test_cadence_runtime_error_emits_special_event() {
+    // The Go helper emits this as the final record when Cadence evaluation
+    // fails.  The Rust converter must treat it as a trace error event, not as
+    // parser failure or a recorder-level error that prevents writer creation.
+    let ndjson = r#"{"type":"call","name":"main"}
+{"type":"step","file":"runtime_error.cdc","line":3}
+{"type":"error","message":"pre-condition failed: balance must be non-negative"}"#;
+
+    let events = parse_ndjson(ndjson).expect("parse runtime-error ndjson");
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let out_dir = tmp.path().join("traces");
+    let source_path = PathBuf::from("runtime_error.cdc");
+
+    CadenceTracer::trace_program_from_events(
+        &source_path,
+        &events,
+        &out_dir,
+        TraceEventsFileFormat::Ctfs,
+    )
+    .expect("runtime error records should be converted into trace Error events");
+
+    let ct = first_ct_file(&out_dir);
+    assert_ctfs_magic(&ct);
+    let size = std::fs::metadata(&ct).unwrap().len();
+    assert!(
+        size > 100,
+        ".ct should contain the runtime error event, got {size} bytes"
     );
 }
