@@ -24,18 +24,21 @@ The Flow recorder is a **two-process recorder**:
 
 The Go helper currently emits **eight** NDJSON event kinds:
 `step`, `variable`, `call`, `return`, `resource_create`, `resource_move`,
-`resource_destroy`, `error`. Cadence runtime errors and panics are emitted as
-a final `error` record and routed into the trace as `EventLogKind::Error`.
-Anything Cadence emits that is not in that schema (e.g. on-chain `event`
-records) is dropped on the helper side before the Rust recorder ever sees it.
-Closing those remaining gaps requires Go-helper changes.
+`resource_destroy`, `error`. `call` records now optionally carry
+`args:[{name,value,cadence_type}]`, recovered from the current Cadence
+activation for formal parameters, and the Rust converter stages them on
+`Call.args`. Cadence runtime errors and panics are emitted as a final `error`
+record and routed into the trace as `EventLogKind::Error`. Anything Cadence
+emits that is not in that schema (e.g. on-chain `event` records) is dropped on
+the helper side before the Rust recorder ever sees it. Closing that remaining
+gap requires a Go-helper change.
 
 ## Summary
 
 | # | Check | Status (pre-fix) | Status (post-fix) | Notes |
 |---|---|---|---|---|
 | a | `register_call` for each call | OK | OK | `tracer.rs::convert_events` emits `register_call` directly for every `TraceEvent::Call`. No `add_event(Call(..))` calls anywhere. |
-| b | Call args via `register_call_arg` / `arg()` | **GAP** (helper-side, not closeable in Rust) | **GAP** (helper-side) | `register_call(fn_id, vec![])` is correct given the input — the Go helper's `TraceEvent` schema only carries a function `name`, no per-call argument values. Closing this requires extending the Go helper to surface `frame.parameters`-style data from the Cadence interpreter (mirrors Move 1.46's Sui `OpenFrame.parameters` route). Documented in **Open gaps** below. |
+| b | Call args via `register_call_arg` / `arg()` | **GAP** (helper-side, not closeable in Rust) | **OK** | `go-helper/main.go` now parses formal parameter names from Cadence `fun` declarations and, on the first stop inside a callee, filters `activation.FunctionValues()` to those parameter names. `call` NDJSON records can carry `args:[{name,value,cadence_type}]`; `src/tracer.rs::convert_events` parses that vector, calls `TraceWriter::arg` for each argument, and passes the returned `FullValueRecord`s to `register_call`. |
 | c | Write/WriteOther/Error/EvmEvent/TraceLogEvent for IO and structured events via `register_special_event` | **GAP** | **PARTIAL** | Resource lifecycle events (create / move / destroy) now mirror the Move 1.46 `External` effect pattern: each emits `register_special_event(EventLogKind::TraceLogEvent, "CadenceResource{Create,Move,Destroy}:<type>#<uuid>", "<payload>")` in addition to the existing variable-record emission. Cadence runtime errors and panics now emit a final helper-side `{"type":"error","message":"..."}` NDJSON record and route through `register_special_event(EventLogKind::Error, "CadenceRuntimeError", message)`. Cadence has no native stdout/stderr from the script side, so `Write`/`WriteOther` is N/A. One helper-side gap remains: on-chain `event` emissions (the `emit MyEvent(...)` Cadence statement, structurally analogous to EVM logs and to Cairo's `StarknetEvent`) are not surfaced by the Go helper at all; once they are, the Rust side should route them through `EventLogKind::EvmEvent` (mirrors EVM 1.39 / Cairo 1.50 routing). |
 | d | Thread events (ThreadStart / Exit / Switch) | OK (N/A) | OK (N/A) | Cadence is single-threaded by design — transactions and scripts run on a single interpreter thread. Recorder correctly emits no thread events. |
 | e | Step records for line navigation | OK | OK | `tracer.rs::convert_events` emits `register_step(path, line)` for every `TraceEvent::Step` and as a leading step for each resource lifecycle event (so the lifecycle event is locatable in source). |
@@ -134,9 +137,23 @@ TraceWriter::register_special_event(
 );
 ```
 
+### 4. Helper-side call args route onto Call records
+
+`go-helper/main.go` extends the `call` record with an optional `args` field:
+
+```json
+{"type":"call","name":"add","args":[{"name":"x","value":"10","cadence_type":"Int"}]}
+```
+
+The helper recovers parameter names from single-line Cadence function
+declarations and reads live values from the current
+`interpreter.VariableActivation` via `activation.FunctionValues()`. The Rust
+side adds `TraceArg`, parses `TraceEvent::Call { name, args }`, stages each
+argument with `TraceWriter::arg`, then calls `register_call`.
+
 ## Tests added
 
-`tests/test_ctfs_audit.rs` (6 new cases):
+`tests/test_ctfs_audit.rs` (7 cases):
 
 * `test_ctfs_writer_produces_ct_container` — runs the tiny inline NDJSON
   fixture through `trace_program_from_events` with
@@ -160,8 +177,12 @@ TraceWriter::register_special_event(
 * `test_cadence_runtime_error_emits_special_event` — synthesises a final
   `error` NDJSON record and verifies the converter creates a populated CTFS
   trace instead of treating the runtime failure as a recorder-level error.
+* `test_cadence_call_args_are_staged_on_call_records` — synthesises the
+  helper's call-args IPC shape for a representative `add(x, y)` Cadence call
+  and asserts the resulting low-level `Call.args` vector is non-empty.
 
-`src/tracer.rs` also has a unit parser test for the new `error` NDJSON kind.
+`src/tracer.rs` also has unit parser tests for the `error` NDJSON kind and
+for `call` records carrying `args`.
 
 The structural assertions are deliberately lightweight (CTFS magic +
 file-size) because verifying the embedded event-log content end-to-end
@@ -177,18 +198,16 @@ LIBRARY_PATH="/nix/store/5hg6h4zjxc3ax7j4ywn6ksd509yl4pmd-zstd-1.5.6/lib" \
 cargo test --release
 ```
 
-* lib unit tests: 28/28 passing
-* `test_ctfs_audit`: 6/6 passing
+* lib unit tests: 29/29 passing
+* `test_ctfs_audit`: 7/7 passing
 * `test_tracer` (existing integration suite): 11/11 passing, 4 ignored
   (Go-helper-required tests, ignored when `cadence-trace-helper` is not
   on `$PATH`)
 
-Total: 45/45 active passing, 0 regressions.
+Total: 47/47 active passing, 0 regressions.
 
-`cargo build --release` passes for the Rust crate. In this shell, `go` and
-`gofmt` are not on `$PATH`, so the build script reports `Could not run go
-build`; helper integration tests remain ignored unless a built
-`cadence-trace-helper` is supplied via `CADENCE_HELPER_BIN`.
+`cargo build --release` passes for the Rust crate. With the repo direnv
+loaded, `go test ./...` and `go build ./...` pass in `go-helper/`.
 
 `cargo clippy --release --all-targets` exits successfully. It still reports
 four pre-existing `unnecessary_map_or` warnings on
@@ -217,14 +236,6 @@ audit-time verification; production CI should still go through
 
 ### Go-helper-side gaps
 
-* **(b) Call args**. The Go helper's `TraceEvent` struct exposes only
-  `Type` / `File` / `Line` / `Name` / `Value` / `CadenceType`; there is
-  no per-call argument vector. Closing audit (b) requires the helper to
-  surface the Cadence interpreter's `frame.Parameters` (or equivalent)
-  as an `args: [{name, value, cadence_type}]` JSON field on the `call`
-  event, then the Rust side stages each via
-  `TraceWriter::arg(name, value)` before `register_call`. Same idiom as
-  Move 1.46 Sui's `OpenFrame.parameters` path.
 * **(c.1) Cadence on-chain `event` emissions**. The Cadence runtime
   surfaces `emit MyEvent(...)` statements via the `OnEmit` callback /
   `runtime.Event` records. The Go helper does not subscribe to that
@@ -276,6 +287,7 @@ audit-time verification; production CI should still go through
 
 Section 5.6's recorder list shows `codetracer-flow-recorder` as audited
 (gaps closed for default Ctfs CLI + resource-lifecycle structured-event
-routing + runtime-error Error routing; helper-side call-arg / on-chain-event
-gaps open for future Go-helper iterations). Audited recorder count:
+routing + runtime-error Error routing + helper-side call args; on-chain
+Cadence event surfacing remains open for a future Go-helper iteration).
+Audited recorder count:
 9 → 10.

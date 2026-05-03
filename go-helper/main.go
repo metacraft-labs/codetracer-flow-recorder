@@ -10,7 +10,7 @@
 //
 //	{"type":"step","file":"path.cdc","line":3}
 //	{"type":"variable","name":"a","value":"10","cadence_type":"Int"}
-//	{"type":"call","name":"compute"}
+//	{"type":"call","name":"compute","args":[{"name":"x","value":"10","cadence_type":"Int"}]}
 //	{"type":"return","value":"94"}
 //	{"type":"error","message":"cadence execution error: ..."}
 package main
@@ -30,13 +30,21 @@ import (
 
 // TraceEvent represents a single NDJSON trace line.
 type TraceEvent struct {
-	Type        string `json:"type"`
-	File        string `json:"file,omitempty"`
-	Line        int    `json:"line,omitempty"`
-	Name        string `json:"name,omitempty"`
-	Value       string `json:"value,omitempty"`
+	Type        string     `json:"type"`
+	File        string     `json:"file,omitempty"`
+	Line        int        `json:"line,omitempty"`
+	Name        string     `json:"name,omitempty"`
+	Value       string     `json:"value,omitempty"`
+	CadenceType string     `json:"cadence_type,omitempty"`
+	Message     string     `json:"message,omitempty"`
+	Args        []TraceArg `json:"args,omitempty"`
+}
+
+// TraceArg is the helper-side schema for a staged CodeTracer call argument.
+type TraceArg struct {
+	Name        string `json:"name"`
+	Value       string `json:"value"`
 	CadenceType string `json:"cadence_type,omitempty"`
-	Message     string `json:"message,omitempty"`
 }
 
 var (
@@ -48,12 +56,63 @@ func emit(event TraceEvent) {
 	_ = encoder.Encode(event)
 }
 
-// buildFunctionMap parses the source to create a mapping from line number
-// to the enclosing function name. This handles Cadence's "fun <name>"
-// declarations. Lines not inside any function map to "main".
-func buildFunctionMap(source []byte) map[int]string {
+type functionInfo struct {
+	lineToName   map[int]string
+	paramsByName map[string][]string
+}
+
+// parseFunctionSignature extracts the function name and formal parameter names
+// from a single-line Cadence declaration such as `pub fun add(x: Int, y: Int)`.
+// It intentionally ignores parameter type syntax after `:` because values and
+// resolved Cadence types are recovered from the live interpreter activation.
+func parseFunctionSignature(trimmed string) (string, []string) {
+	idx := strings.Index(trimmed, "fun ")
+	if idx < 0 {
+		return "", nil
+	}
+
+	rest := trimmed[idx+4:]
+	openIdx := strings.Index(rest, "(")
+	if openIdx < 0 {
+		return "", nil
+	}
+
+	name := strings.TrimSpace(rest[:openIdx])
+	if name == "" {
+		return "", nil
+	}
+
+	closeIdx := strings.Index(rest[openIdx+1:], ")")
+	if closeIdx < 0 {
+		return name, nil
+	}
+
+	paramsText := rest[openIdx+1 : openIdx+1+closeIdx]
+	if strings.TrimSpace(paramsText) == "" {
+		return name, nil
+	}
+
+	var params []string
+	for _, part := range strings.Split(paramsText, ",") {
+		beforeType := strings.SplitN(part, ":", 2)[0]
+		paramName := strings.TrimSpace(beforeType)
+		if paramName != "" {
+			params = append(params, paramName)
+		}
+	}
+
+	return name, params
+}
+
+// buildFunctionInfo parses the source to create a mapping from line number
+// to the enclosing function name and a function-name to formal-parameter map.
+// Lines not inside any function map to "main".
+func buildFunctionInfo(source []byte) functionInfo {
 	lines := strings.Split(string(source), "\n")
-	result := make(map[int]string)
+	result := functionInfo{
+		lineToName:   make(map[int]string),
+		paramsByName: make(map[string][]string),
+	}
 
 	type funcRange struct {
 		name       string
@@ -69,23 +128,17 @@ func buildFunctionMap(source []byte) map[int]string {
 		trimmed := strings.TrimSpace(line)
 
 		// Check for function declaration
-		if idx := strings.Index(trimmed, "fun "); idx >= 0 {
-			rest := trimmed[idx+4:]
-			name := ""
-			for _, ch := range rest {
-				if ch == '(' || ch == ':' || ch == ' ' || ch == '{' {
-					break
-				}
-				name += string(ch)
+		name, params := parseFunctionSignature(trimmed)
+		if name != "" {
+			if _, exists := result.paramsByName[name]; !exists {
+				result.paramsByName[name] = params
 			}
-			if name != "" {
-				// Push function with the current brace depth (before counting this line)
-				stack = append(stack, funcRange{
-					name:       name,
-					startLine:  lineNo,
-					braceDepth: braceDepth,
-				})
-			}
+			// Push function with the current brace depth (before counting this line)
+			stack = append(stack, funcRange{
+				name:       name,
+				startLine:  lineNo,
+				braceDepth: braceDepth,
+			})
 		}
 
 		// Count braces on this line
@@ -103,13 +156,55 @@ func buildFunctionMap(source []byte) map[int]string {
 
 		// Assign the current function name to this line
 		if len(stack) > 0 {
-			result[lineNo] = stack[len(stack)-1].name
+			result.lineToName[lineNo] = stack[len(stack)-1].name
 		} else {
-			result[lineNo] = "main"
+			result.lineToName[lineNo] = "main"
 		}
 	}
 
 	return result
+}
+
+func traceArgFromVariable(name string, variable interpreter.Variable, interp *interpreter.Interpreter) TraceArg {
+	val := variable.GetValue(interp)
+	valueStr := fmt.Sprintf("%v", val)
+	typeStr := ""
+	if val != nil {
+		cadenceVal, err := runtime.ExportValue(
+			val,
+			interp,
+			interpreter.EmptyLocationRange,
+		)
+		if err == nil && cadenceVal != nil {
+			typeStr = cadenceVal.Type().ID()
+		}
+	}
+	return TraceArg{
+		Name:        name,
+		Value:       valueStr,
+		CadenceType: typeStr,
+	}
+}
+
+func traceArgsFromActivation(
+	activation *interpreter.VariableActivation,
+	paramNames []string,
+	interp *interpreter.Interpreter,
+) []TraceArg {
+	if activation == nil || len(paramNames) == 0 {
+		return nil
+	}
+
+	values := activation.FunctionValues()
+	args := make([]TraceArg, 0, len(paramNames))
+	for _, name := range paramNames {
+		variable, ok := values[name]
+		if !ok {
+			continue
+		}
+		args = append(args, traceArgFromVariable(name, variable, interp))
+	}
+	return args
 }
 
 func main() {
@@ -198,8 +293,8 @@ func executeAndTrace(source []byte) error {
 	prevFuncName := ""
 	var callStack []string
 
-	// Pre-parse source to build a line→function map.
-	funcMap := buildFunctionMap(source)
+	// Pre-parse source to build a line→function map and formal-parameter map.
+	funcInfo := buildFunctionInfo(source)
 
 	// Read the first stop from the Stops() channel.
 	stops := debugger.Stops()
@@ -227,10 +322,15 @@ func executeAndTrace(source []byte) error {
 
 		stmt := stop.Statement
 		pos := stmt.StartPosition()
-		currentFunc := funcMap[pos.Line]
+		currentFunc := funcInfo.lineToName[pos.Line]
 		if currentFunc == "" {
 			currentFunc = "main"
 		}
+		currentArgs := traceArgsFromActivation(
+			activation,
+			funcInfo.paramsByName[currentFunc],
+			stop.Interpreter,
+		)
 
 		// Detect function transitions by comparing the current function
 		// name (derived from source line) with the previous one.
@@ -240,6 +340,7 @@ func executeAndTrace(source []byte) error {
 				emit(TraceEvent{
 					Type: "call",
 					Name: currentFunc,
+					Args: currentArgs,
 				})
 				callStack = append(callStack, currentFunc)
 			} else {
@@ -261,6 +362,7 @@ func executeAndTrace(source []byte) error {
 					emit(TraceEvent{
 						Type: "call",
 						Name: currentFunc,
+						Args: currentArgs,
 					})
 					callStack = append(callStack, currentFunc)
 				}
