@@ -22,16 +22,16 @@ The Flow recorder is a **two-process recorder**:
   entry point (`register_call`, `register_step`, `register_special_event`,
   `arg`, `register_thread_*`) is reachable.
 
-The Go helper currently emits **eight** NDJSON event kinds:
+The Go helper currently emits **nine** NDJSON event kinds:
 `step`, `variable`, `call`, `return`, `resource_create`, `resource_move`,
-`resource_destroy`, `error`. `call` records now optionally carry
+`resource_destroy`, `error`, `event`. `call` records now optionally carry
 `args:[{name,value,cadence_type}]`, recovered from the current Cadence
 activation for formal parameters, and the Rust converter stages them on
 `Call.args`. Cadence runtime errors and panics are emitted as a final `error`
-record and routed into the trace as `EventLogKind::Error`. Anything Cadence
-emits that is not in that schema (e.g. on-chain `event` records) is dropped on
-the helper side before the Rust recorder ever sees it. Closing that remaining
-gap requires a Go-helper change.
+record and routed into the trace as `EventLogKind::Error`. Cadence
+`emit MyEvent(...)` statements are surfaced through the runtime interface's
+`OnEmitEvent` callback as `event` records and routed into the trace as
+`EventLogKind::EvmEvent`.
 
 ## Summary
 
@@ -39,7 +39,7 @@ gap requires a Go-helper change.
 |---|---|---|---|---|
 | a | `register_call` for each call | OK | OK | `tracer.rs::convert_events` emits `register_call` directly for every `TraceEvent::Call`. No `add_event(Call(..))` calls anywhere. |
 | b | Call args via `register_call_arg` / `arg()` | **GAP** (helper-side, not closeable in Rust) | **OK** | `go-helper/main.go` now parses formal parameter names from Cadence `fun` declarations and, on the first stop inside a callee, filters `activation.FunctionValues()` to those parameter names. `call` NDJSON records can carry `args:[{name,value,cadence_type}]`; `src/tracer.rs::convert_events` parses that vector, calls `TraceWriter::arg` for each argument, and passes the returned `FullValueRecord`s to `register_call`. |
-| c | Write/WriteOther/Error/EvmEvent/TraceLogEvent for IO and structured events via `register_special_event` | **GAP** | **PARTIAL** | Resource lifecycle events (create / move / destroy) now mirror the Move 1.46 `External` effect pattern: each emits `register_special_event(EventLogKind::TraceLogEvent, "CadenceResource{Create,Move,Destroy}:<type>#<uuid>", "<payload>")` in addition to the existing variable-record emission. Cadence runtime errors and panics now emit a final helper-side `{"type":"error","message":"..."}` NDJSON record and route through `register_special_event(EventLogKind::Error, "CadenceRuntimeError", message)`. Cadence has no native stdout/stderr from the script side, so `Write`/`WriteOther` is N/A. One helper-side gap remains: on-chain `event` emissions (the `emit MyEvent(...)` Cadence statement, structurally analogous to EVM logs and to Cairo's `StarknetEvent`) are not surfaced by the Go helper at all; once they are, the Rust side should route them through `EventLogKind::EvmEvent` (mirrors EVM 1.39 / Cairo 1.50 routing). |
+| c | Write/WriteOther/Error/EvmEvent/TraceLogEvent for IO and structured events via `register_special_event` | **GAP** | **OK** | Resource lifecycle events (create / move / destroy) now mirror the Move 1.46 `External` effect pattern: each emits `register_special_event(EventLogKind::TraceLogEvent, "CadenceResource{Create,Move,Destroy}:<type>#<uuid>", "<payload>")` in addition to the existing variable-record emission. Cadence runtime errors and panics now emit a final helper-side `{"type":"error","message":"..."}` NDJSON record and route through `register_special_event(EventLogKind::Error, "CadenceRuntimeError", message)`. Cadence `emit MyEvent(...)` statements now surface through `go-helper/main.go`'s `OnEmitEvent` callback as `{"type":"event","name":"...","payload":"..."}` and route through `register_special_event(EventLogKind::EvmEvent, "CadenceEvent:<name>", payload)`. Cadence has no native stdout/stderr from the script side, so `Write`/`WriteOther` is N/A. |
 | d | Thread events (ThreadStart / Exit / Switch) | OK (N/A) | OK (N/A) | Cadence is single-threaded by design — transactions and scripts run on a single interpreter thread. Recorder correctly emits no thread events. |
 | e | Step records for line navigation | OK | OK | `tracer.rs::convert_events` emits `register_step(path, line)` for every `TraceEvent::Step` and as a leading step for each resource lifecycle event (so the lifecycle event is locatable in source). |
 | f | Canonical CTFS schema match | **GAP** | **OK** | Pre-fix CLI `--format` exposed only `binary` / `json` (defaulting to `binary`, the legacy CBOR+Zstd format) with no way to request the canonical CTFS multi-stream container. Post-fix CLI exposes a typed `OutputFormat { Ctfs, Binary, Json }` `clap::ValueEnum` defaulting to `ctfs` for both `record` and `replay` subcommands, plus an `impl From<OutputFormat> for TraceEventsFileFormat` so dispatch sites stay one-liner. Same fix applied in EVM (1.39), Solana (1.44), Move (1.46), Cardano (1.48), Cairo (1.50). |
@@ -151,9 +151,36 @@ declarations and reads live values from the current
 side adds `TraceArg`, parses `TraceEvent::Call { name, args }`, stages each
 argument with `TraceWriter::arg`, then calls `register_call`.
 
+### 5. Cadence emitted events route through EvmEvent
+
+`go-helper/main.go` now wires the pinned Cadence runtime's
+`runtime_utils.TestRuntimeInterface.OnEmitEvent func(cadence.Event) error`
+callback.  For each Cadence `emit MyEvent(...)` statement, the helper emits:
+
+```json
+{"type":"event","name":"MyEvent","payload":"s.01...MyEvent(message: \"done\")"}
+```
+
+The helper prefers `event.EventType.QualifiedIdentifier` for `name`, falling
+back to `event.EventType.ID()` if needed, and uses `event.String()` as the
+payload so field values are preserved in Cadence's own formatting.  The Rust
+side adds `TraceEvent::Event { name, payload }` and routes it with:
+
+```rust
+TraceWriter::register_special_event(
+    &mut *self.writer,
+    EventLogKind::EvmEvent,
+    &format!("CadenceEvent:{}", name),
+    payload,
+);
+```
+
+This mirrors the EVM 1.39 LOG-opcode and Cairo 1.50 StarknetEvent routing
+pattern.
+
 ## Tests added
 
-`tests/test_ctfs_audit.rs` (7 cases):
+`tests/test_ctfs_audit.rs` (8 cases):
 
 * `test_ctfs_writer_produces_ct_container` — runs the tiny inline NDJSON
   fixture through `trace_program_from_events` with
@@ -180,9 +207,13 @@ argument with `TraceWriter::arg`, then calls `register_call`.
 * `test_cadence_call_args_are_staged_on_call_records` — synthesises the
   helper's call-args IPC shape for a representative `add(x, y)` Cadence call
   and asserts the resulting low-level `Call.args` vector is non-empty.
+* `test_cadence_events_route_to_evm_event_log` — synthesises the helper's
+  `event` IPC shape for `emit MyEvent(...)` and asserts the in-memory
+  low-level event is `EventLogKind::EvmEvent` with
+  `CadenceEvent:MyEvent` metadata.
 
 `src/tracer.rs` also has unit parser tests for the `error` NDJSON kind and
-for `call` records carrying `args`.
+for `call` records carrying `args`, plus the new `event` NDJSON kind.
 
 The structural assertions are deliberately lightweight (CTFS magic +
 file-size) because verifying the embedded event-log content end-to-end
@@ -195,25 +226,25 @@ open follow-up below.
 cd /home/zahary/metacraft/codetracer-flow-recorder
 AH_TEST_RESOURCE_GUARD=1 \
 LIBRARY_PATH="/nix/store/5hg6h4zjxc3ax7j4ywn6ksd509yl4pmd-zstd-1.5.6/lib" \
-cargo test --release
+cargo test
 ```
 
-* lib unit tests: 29/29 passing
-* `test_ctfs_audit`: 7/7 passing
+* lib unit tests: 30/30 passing
+* `test_ctfs_audit`: 8/8 passing
 * `test_tracer` (existing integration suite): 11/11 passing, 4 ignored
   (Go-helper-required tests, ignored when `cadence-trace-helper` is not
   on `$PATH`)
 
-Total: 47/47 active passing, 0 regressions.
+Total: 49/49 active passing, 0 regressions.
 
 `cargo build --release` passes for the Rust crate. With the repo direnv
-loaded, `go test ./...` and `go build ./...` pass in `go-helper/`.
+loaded, `go test ./...` and `go build ./...` pass in `go-helper/`. A
+manual helper smoke with a temporary Cadence script containing
+`emit MyEvent(message: "done")` produced the expected `event` NDJSON record.
 
-`cargo clippy --release --all-targets` exits successfully. It still reports
-four pre-existing `unnecessary_map_or` warnings on
-`p.extension().map_or(false, ...)` patterns in `src/replay.rs`,
-`src/tracer.rs`, and `tests/test_tracer.rs`; those are unrelated to this
-runtime-error follow-up and remain untouched.
+`cargo clippy --release --all-targets` was not rerun in this event-surfacing
+pass; the previous audit note about four pre-existing `unnecessary_map_or`
+warnings remains unchanged.
 
 ### Build / test environment notes
 
@@ -236,19 +267,10 @@ audit-time verification; production CI should still go through
 
 ### Go-helper-side gaps
 
-* **(c.1) Cadence on-chain `event` emissions**. The Cadence runtime
-  surfaces `emit MyEvent(...)` statements via the `OnEmit` callback /
-  `runtime.Event` records. The Go helper does not subscribe to that
-  callback today, so emitted events never reach the Rust side. Once the
-  helper adds an `event` NDJSON kind (`{"type":"event","name":"...","payload":"..."}`),
-  the Rust side should match it and route through
-  `register_special_event(EventLogKind::EvmEvent, "CadenceEvent:<name>", payload)`.
-  Mirrors EVM 1.39's LOG-opcode routing and Cairo 1.50's
-  `StarknetEvent` routing.
 * **Replay-side resource events**. The replay path (`replay.rs`)
   consumes the same `parse_ndjson` pipeline, so the Rust side already
   handles resource lifecycle events when present. Whether the Go
-  helper's `replay` mode actually emits `resource_*` events for on-chain
+  helper's `replay` mode actually emits `resource_*` / `event` records for on-chain
   state changes is unverified — the replay subcommand has not been
   exercised end-to-end against a real Flow Access Node in this audit.
 
@@ -287,7 +309,8 @@ audit-time verification; production CI should still go through
 
 Section 5.6's recorder list shows `codetracer-flow-recorder` as audited
 (gaps closed for default Ctfs CLI + resource-lifecycle structured-event
-routing + runtime-error Error routing + helper-side call args; on-chain
-Cadence event surfacing remains open for a future Go-helper iteration).
+routing + runtime-error Error routing + helper-side call args + Cadence
+`emit` event surfacing; replay-side on-chain state/event coverage remains
+unverified).
 Audited recorder count:
 9 → 10.

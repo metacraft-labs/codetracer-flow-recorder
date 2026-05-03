@@ -12,6 +12,7 @@
 //	{"type":"variable","name":"a","value":"10","cadence_type":"Int"}
 //	{"type":"call","name":"compute","args":[{"name":"x","value":"10","cadence_type":"Int"}]}
 //	{"type":"return","value":"94"}
+//	{"type":"event","name":"MyEvent","payload":"MyEvent(message: \"done\")"}
 //	{"type":"error","message":"cadence execution error: ..."}
 package main
 
@@ -22,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/onflow/cadence"
 	"github.com/onflow/cadence/common"
 	"github.com/onflow/cadence/interpreter"
 	"github.com/onflow/cadence/runtime"
@@ -35,6 +37,7 @@ type TraceEvent struct {
 	Line        int        `json:"line,omitempty"`
 	Name        string     `json:"name,omitempty"`
 	Value       string     `json:"value,omitempty"`
+	Payload     string     `json:"payload,omitempty"`
 	CadenceType string     `json:"cadence_type,omitempty"`
 	Message     string     `json:"message,omitempty"`
 	Args        []TraceArg `json:"args,omitempty"`
@@ -207,6 +210,23 @@ func traceArgsFromActivation(
 	return args
 }
 
+func traceEventName(event cadence.Event) string {
+	if event.EventType == nil {
+		return "Unknown"
+	}
+	if event.EventType.QualifiedIdentifier != "" {
+		return event.EventType.QualifiedIdentifier
+	}
+	return event.EventType.ID()
+}
+
+func traceEventPayload(event cadence.Event) string {
+	if event.EventType == nil {
+		return fmt.Sprintf("%v", event)
+	}
+	return event.String()
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: cadence-trace-helper <source-file.cdc>\n")
@@ -256,6 +276,14 @@ func executeAndTrace(source []byte) error {
 		Storage: runtime_utils.NewTestLedger(nil, nil),
 		OnGetCode: func(loc runtime.Location) ([]byte, error) {
 			return source, nil
+		},
+		OnEmitEvent: func(event cadence.Event) error {
+			emit(TraceEvent{
+				Type:    "event",
+				Name:    traceEventName(event),
+				Payload: traceEventPayload(event),
+			})
+			return nil
 		},
 	}
 

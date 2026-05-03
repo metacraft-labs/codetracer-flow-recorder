@@ -12,6 +12,8 @@
 //!   `.ct` container is materially populated.
 //! * Cadence runtime errors emitted by the Go helper as final `error` NDJSON
 //!   records complete the `EventLogKind::Error` route.
+//! * Cadence `emit MyEvent(...)` records from the Go helper complete the
+//!   `EventLogKind::EvmEvent` route.
 //!
 //! The structural assertions here are deliberately lightweight (CTFS
 //! magic + file size) — verifying the embedded event-log content end-to-end
@@ -22,7 +24,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer};
-use codetracer_trace_types::TraceLowLevelEvent;
+use codetracer_trace_types::{EventLogKind, TraceLowLevelEvent};
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 /// Canonical CTFS multi-stream container magic bytes.
@@ -285,4 +287,34 @@ fn test_cadence_call_args_are_staged_on_call_records() {
         call_arg_lengths.iter().any(|len| *len >= 2),
         "expected a Call record with staged Cadence args, got lengths {call_arg_lengths:?}"
     );
+}
+
+#[test]
+fn test_cadence_events_route_to_evm_event_log() {
+    // This mirrors the helper-side OnEmitEvent IPC shape for a Cadence
+    // `emit MyEvent(message: "done")` statement.  The Rust converter should
+    // route it through the EVM-event bucket, matching EVM LOG and Cairo
+    // StarknetEvent audit patterns.
+    let ndjson = r#"{"type":"call","name":"main"}
+{"type":"step","file":"event_test.cdc","line":3}
+{"type":"event","name":"MyEvent","payload":"MyEvent(message: \"done\")"}
+{"type":"return","value":"","cadence_type":"Void"}"#;
+
+    let events = parse_ndjson(ndjson).expect("parse event ndjson");
+    let source_path = PathBuf::from("event_test.cdc");
+
+    let low_level_events = CadenceTracer::trace_low_level_events_from_events(&source_path, &events)
+        .expect("event records should be accepted by the converter");
+    let event = low_level_events
+        .iter()
+        .find_map(|event| match event {
+            TraceLowLevelEvent::Event(event) if event.metadata == "CadenceEvent:MyEvent" => {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("expected CadenceEvent:MyEvent special event");
+
+    assert_eq!(event.kind, EventLogKind::EvmEvent);
+    assert_eq!(event.content, "MyEvent(message: \"done\")");
 }
