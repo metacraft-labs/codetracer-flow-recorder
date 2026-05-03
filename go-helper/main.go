@@ -12,6 +12,7 @@
 //	{"type":"variable","name":"a","value":"10","cadence_type":"Int"}
 //	{"type":"call","name":"compute"}
 //	{"type":"return","value":"94"}
+//	{"type":"error","message":"cadence execution error: ..."}
 package main
 
 import (
@@ -35,6 +36,7 @@ type TraceEvent struct {
 	Name        string `json:"name,omitempty"`
 	Value       string `json:"value,omitempty"`
 	CadenceType string `json:"cadence_type,omitempty"`
+	Message     string `json:"message,omitempty"`
 }
 
 var (
@@ -135,8 +137,10 @@ func main() {
 
 	err = executeAndTrace(source)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "cadence execution error: %v\n", err)
-		os.Exit(1)
+		emit(TraceEvent{
+			Type:    "error",
+			Message: fmt.Sprintf("%v", err),
+		})
 	}
 }
 
@@ -177,6 +181,11 @@ func executeAndTrace(source []byte) error {
 	resultCh := make(chan execResultT, 1)
 
 	go func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				resultCh <- execResultT{err: fmt.Errorf("panic: %v", recovered)}
+			}
+		}()
 		val, err := rt.ExecuteScript(runtime.Script{Source: source}, ctx)
 		resultCh <- execResultT{val, err}
 	}()

@@ -46,6 +46,8 @@ pub enum TraceEvent {
         #[serde(default)]
         cadence_type: Option<String>,
     },
+    #[serde(rename = "error")]
+    Error { message: String },
 
     // ----- Resource lifecycle events (M4) -----
     #[serde(rename = "resource_create")]
@@ -369,6 +371,14 @@ impl CadenceTracer {
                         }
                     }
                 }
+                TraceEvent::Error { message } => {
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::Error,
+                        "CadenceRuntimeError",
+                        message,
+                    );
+                }
 
                 // --- Resource lifecycle events (M4) ---
                 TraceEvent::ResourceCreate {
@@ -571,6 +581,19 @@ mod tests {
             TraceEvent::Return {
                 value: Some("94".to_string()),
                 cadence_type: Some("Int".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_error() {
+        let input = r#"{"type":"error","message":"pre-condition failed"}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::Error {
+                message: "pre-condition failed".to_string(),
             }
         );
     }
