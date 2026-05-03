@@ -22,6 +22,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer};
+use codetracer_trace_types::TraceLowLevelEvent;
 use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 /// Canonical CTFS multi-stream container magic bytes.
@@ -251,5 +252,37 @@ fn test_cadence_runtime_error_emits_special_event() {
     assert!(
         size > 100,
         ".ct should contain the runtime error event, got {size} bytes"
+    );
+}
+
+#[test]
+fn test_cadence_call_args_are_staged_on_call_records() {
+    // This fixture mirrors the Go helper's call-args IPC shape for a Cadence
+    // call such as `add(x: Int, y: Int)`.  The Rust converter must stage both
+    // args through TraceWriter::arg before register_call so the resulting
+    // Call record has a non-empty args vector.
+    let ndjson = r#"{"type":"call","name":"main"}
+{"type":"step","file":"call_args.cdc","line":1}
+{"type":"call","name":"add","args":[{"name":"x","value":"10","cadence_type":"Int"},{"name":"y","value":"20","cadence_type":"Int"}]}
+{"type":"step","file":"call_args.cdc","line":2}
+{"type":"return","value":"30","cadence_type":"Int"}
+{"type":"return","value":"30","cadence_type":"Int"}"#;
+
+    let events = parse_ndjson(ndjson).expect("parse call-args ndjson");
+    let source_path = PathBuf::from("call_args.cdc");
+
+    let low_level_events = CadenceTracer::trace_low_level_events_from_events(&source_path, &events)
+        .expect("call args should be accepted by the converter");
+    let call_arg_lengths: Vec<usize> = low_level_events
+        .iter()
+        .filter_map(|event| match event {
+            TraceLowLevelEvent::Call(call) => Some(call.args.len()),
+            _ => None,
+        })
+        .collect();
+
+    assert!(
+        call_arg_lengths.iter().any(|len| *len >= 2),
+        "expected a Call record with staged Cadence args, got lengths {call_arg_lengths:?}"
     );
 }

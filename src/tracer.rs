@@ -12,7 +12,10 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
 
-use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord, NONE_VALUE};
+use codetracer_trace_types::{
+    EventLogKind, FullValueRecord, Line, TraceLowLevelEvent, TypeKind, ValueRecord, NONE_VALUE,
+};
+use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
 use eyre::{eyre, Context, Result};
@@ -38,7 +41,11 @@ pub enum TraceEvent {
         cadence_type: Option<String>,
     },
     #[serde(rename = "call")]
-    Call { name: String },
+    Call {
+        name: String,
+        #[serde(default)]
+        args: Vec<TraceArg>,
+    },
     #[serde(rename = "return")]
     Return {
         #[serde(default)]
@@ -77,6 +84,15 @@ pub enum TraceEvent {
         file: String,
         line: u32,
     },
+}
+
+/// A helper-side call argument staged onto the next CodeTracer Call record.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct TraceArg {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub cadence_type: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -297,6 +313,32 @@ impl CadenceTracer {
         Ok(())
     }
 
+    /// Convert pre-parsed NDJSON events into inspectable low-level events.
+    ///
+    /// This library helper is used by focused audit tests that need to assert
+    /// exact event payloads without depending on a platform-specific trace
+    /// container reader.
+    pub fn trace_low_level_events_from_events(
+        source_path: &Path,
+        events: &[TraceEvent],
+    ) -> Result<Vec<TraceLowLevelEvent>> {
+        let program_str = source_path.to_string_lossy();
+        let mut tracer = CadenceTracer {
+            writer: Box::new(NonStreamingTraceWriter::new(&program_str, &[])),
+            type_ids: HashMap::new(),
+        };
+
+        TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
+        for type_name in &["Int", "UInt64", "Fix64", "Bool", "String", "Address"] {
+            let type_id =
+                TraceWriter::ensure_type_id(&mut *tracer.writer, TypeKind::Int, type_name);
+            tracer.type_ids.insert(type_name.to_string(), type_id);
+        }
+
+        tracer.convert_events(source_path, events)?;
+        Ok(tracer.writer.events().to_vec())
+    }
+
     /// Convert NDJSON trace events into CodeTracer trace writer calls.
     fn convert_events(&mut self, source_path: &Path, events: &[TraceEvent]) -> Result<()> {
         for event in events {
@@ -309,38 +351,27 @@ impl CadenceTracer {
                     value,
                     cadence_type,
                 } => {
-                    let type_name = cadence_type.as_deref().unwrap_or("Int");
-                    let type_id = self
-                        .type_ids
-                        .get(type_name)
-                        .copied()
-                        .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
-
-                    // Try to parse the value as an integer.
-                    let val_record = if let Ok(i) = value.parse::<i64>() {
-                        ValueRecord::Int { i, type_id }
-                    } else {
-                        // Fall back to string representation.
-                        ValueRecord::String {
-                            text: value.clone(),
-                            type_id,
-                        }
-                    };
-
+                    let val_record = self.value_record(value, cadence_type.as_deref());
                     TraceWriter::register_variable_with_full_value(
                         &mut *self.writer,
                         name,
                         val_record,
                     );
                 }
-                TraceEvent::Call { name } => {
+                TraceEvent::Call { name, args } => {
                     let fn_id = TraceWriter::ensure_function_id(
                         &mut *self.writer,
                         name,
                         source_path,
                         Line(1),
                     );
-                    TraceWriter::register_call(&mut *self.writer, fn_id, vec![]);
+                    let mut call_args: Vec<FullValueRecord> = Vec::with_capacity(args.len());
+                    for arg in args {
+                        let val_record = self.value_record(&arg.value, arg.cadence_type.as_deref());
+                        let full_arg = TraceWriter::arg(&mut *self.writer, &arg.name, val_record);
+                        call_args.push(full_arg);
+                    }
+                    TraceWriter::register_call(&mut *self.writer, fn_id, call_args);
                 }
                 TraceEvent::Return {
                     value,
@@ -500,6 +531,24 @@ impl CadenceTracer {
         self.type_ids.insert(key, type_id);
         type_id
     }
+
+    fn value_record(&self, value: &str, cadence_type: Option<&str>) -> ValueRecord {
+        let type_name = cadence_type.unwrap_or("Int");
+        let type_id = self
+            .type_ids
+            .get(type_name)
+            .copied()
+            .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
+
+        if let Ok(i) = value.parse::<i64>() {
+            ValueRecord::Int { i, type_id }
+        } else {
+            ValueRecord::String {
+                text: value.to_string(),
+                type_id,
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -567,6 +616,32 @@ mod tests {
             events[0],
             TraceEvent::Call {
                 name: "compute".to_string(),
+                args: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_call_args() {
+        let input = r#"{"type":"call","name":"add","args":[{"name":"x","value":"10","cadence_type":"Int"},{"name":"y","value":"20","cadence_type":"Int"}]}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::Call {
+                name: "add".to_string(),
+                args: vec![
+                    TraceArg {
+                        name: "x".to_string(),
+                        value: "10".to_string(),
+                        cadence_type: Some("Int".to_string()),
+                    },
+                    TraceArg {
+                        name: "y".to_string(),
+                        value: "20".to_string(),
+                        cadence_type: Some("Int".to_string()),
+                    },
+                ],
             }
         );
     }
@@ -622,6 +697,7 @@ mod tests {
             events[0],
             TraceEvent::Call {
                 name: "main".to_string(),
+                args: Vec::new(),
             }
         );
 
@@ -780,10 +856,17 @@ mod tests {
             .map(|e| e.path())
             .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
             .collect();
-        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        assert!(
+            !ct_files.is_empty(),
+            "expected at least one .ct file in output dir"
+        );
         let content = std::fs::read(&ct_files[0]).expect("read .ct file");
         assert!(content.len() >= 5, ".ct file too small");
-        assert_eq!(&content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
+        assert_eq!(
+            &content[..5],
+            &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2],
+            "CTFS magic bytes mismatch"
+        );
     }
 
     #[test]
@@ -816,9 +899,16 @@ mod tests {
             .map(|e| e.path())
             .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
             .collect();
-        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        assert!(
+            !ct_files.is_empty(),
+            "expected at least one .ct file in output dir"
+        );
         let ct_content = std::fs::read(&ct_files[0]).expect("read .ct file");
         assert!(ct_content.len() >= 5, ".ct file too small");
-        assert_eq!(&ct_content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
+        assert_eq!(
+            &ct_content[..5],
+            &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2],
+            "CTFS magic bytes mismatch"
+        );
     }
 }
