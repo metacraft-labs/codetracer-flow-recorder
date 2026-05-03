@@ -55,6 +55,8 @@ pub enum TraceEvent {
     },
     #[serde(rename = "error")]
     Error { message: String },
+    #[serde(rename = "event")]
+    Event { name: String, payload: String },
 
     // ----- Resource lifecycle events (M4) -----
     #[serde(rename = "resource_create")]
@@ -410,6 +412,14 @@ impl CadenceTracer {
                         message,
                     );
                 }
+                TraceEvent::Event { name, payload } => {
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::EvmEvent,
+                        &format!("CadenceEvent:{}", name),
+                        payload,
+                    );
+                }
 
                 // --- Resource lifecycle events (M4) ---
                 TraceEvent::ResourceCreate {
@@ -669,6 +679,20 @@ mod tests {
             events[0],
             TraceEvent::Error {
                 message: "pre-condition failed".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_event() {
+        let input = r#"{"type":"event","name":"MyEvent","payload":"MyEvent(message: \"done\")"}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(
+            events[0],
+            TraceEvent::Event {
+                name: "MyEvent".to_string(),
+                payload: "MyEvent(message: \"done\")".to_string(),
             }
         );
     }
