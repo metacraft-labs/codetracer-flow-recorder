@@ -14,6 +14,9 @@
 //!   records complete the `EventLogKind::Error` route.
 //! * Cadence `emit MyEvent(...)` records from the Go helper complete the
 //!   `EventLogKind::EvmEvent` route.
+//! * Replay-shaped helper NDJSON containing on-chain resource state changes
+//!   and Cadence events is accepted by the Rust converter; live replay remains
+//!   blocked at the helper CLI/API boundary documented in the audit memo.
 //!
 //! The structural assertions here are deliberately lightweight (CTFS
 //! magic + file size) — verifying the embedded event-log content end-to-end
@@ -317,4 +320,56 @@ fn test_cadence_events_route_to_evm_event_log() {
 
     assert_eq!(event.kind, EventLogKind::EvmEvent);
     assert_eq!(event.content, "MyEvent(message: \"done\")");
+}
+
+#[test]
+fn test_replay_on_chain_state_and_event_ndjson_routes_to_special_events() {
+    // This is the replay-side content contract the Go helper must satisfy once
+    // it grows a real `replay` subcommand.  If replay emits resource lifecycle
+    // and Cadence event NDJSON records, the existing Rust converter preserves
+    // both in the structured event stream.
+    let ndjson = r#"{"type":"call","name":"execute"}
+{"type":"step","file":"tx_deadbeef.cdc","line":8}
+{"type":"resource_move","resource_type":"FlowToken.Vault","uuid":9001,"from_owner":"0xSender","to_owner":"0xReceiver","file":"FlowToken.cdc","line":42}
+{"type":"event","name":"flow.AccountContract.TokensDeposited","payload":"TokensDeposited(amount: 10.0, to: 0xReceiver)"}
+{"type":"return","value":"","cadence_type":"Void"}"#;
+
+    let events = parse_ndjson(ndjson).expect("parse replay-side resource/event ndjson");
+    let source_path = PathBuf::from("tx_deadbeef.cdc");
+
+    let low_level_events = CadenceTracer::trace_low_level_events_from_events(&source_path, &events)
+        .expect("replay-side resource/event records should be accepted by the converter");
+
+    let resource_event = low_level_events
+        .iter()
+        .find_map(|event| match event {
+            TraceLowLevelEvent::Event(event)
+                if event.metadata == "CadenceResourceMove:FlowToken.Vault#9001" =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("expected replay resource_move special event");
+
+    assert_eq!(resource_event.kind, EventLogKind::TraceLogEvent);
+    assert_eq!(resource_event.content, "from=0xSender to=0xReceiver");
+
+    let cadence_event = low_level_events
+        .iter()
+        .find_map(|event| match event {
+            TraceLowLevelEvent::Event(event)
+                if event.metadata == "CadenceEvent:flow.AccountContract.TokensDeposited" =>
+            {
+                Some(event)
+            }
+            _ => None,
+        })
+        .expect("expected replay Cadence event special event");
+
+    assert_eq!(cadence_event.kind, EventLogKind::EvmEvent);
+    assert_eq!(
+        cadence_event.content,
+        "TokensDeposited(amount: 10.0, to: 0xReceiver)"
+    );
 }
