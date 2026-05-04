@@ -117,8 +117,16 @@ pub fn replay_transaction(
 ) -> Result<()> {
     let helper_bin =
         std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
+    replay_transaction_with_helper(config, out_dir, format, &helper_bin)
+}
 
-    let mut cmd = Command::new(&helper_bin);
+fn replay_transaction_with_helper(
+    config: &ReplayConfig,
+    out_dir: &Path,
+    format: TraceEventsFileFormat,
+    helper_bin: &str,
+) -> Result<()> {
+    let mut cmd = Command::new(helper_bin);
     cmd.arg("replay")
         .arg("--tx-hash")
         .arg(&config.tx_hash)
@@ -141,11 +149,13 @@ pub fn replay_transaction(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        let boundary_hint = replay_helper_boundary_hint(&stderr);
         return Err(eyre!(
-            "Cadence helper '{}' replay mode exited with status {}: {}",
+            "Cadence helper '{}' replay mode exited with status {}: {}{}",
             helper_bin,
             output.status,
-            stderr.trim()
+            stderr.trim(),
+            boundary_hint
         ));
     }
 
@@ -168,6 +178,17 @@ pub fn replay_transaction(
         .join(format!("tx_{}.cdc", &config.tx_hash));
 
     CadenceTracer::trace_program_from_events(&source_path, &events, out_dir, format)
+}
+
+fn replay_helper_boundary_hint(stderr: &str) -> &'static str {
+    if stderr.contains("error reading source file") && stderr.contains("replay") {
+        "\nReplay helper API boundary: the current Go helper appears to treat \
+         'replay' as a source-file path instead of a replay subcommand. \
+         On-chain state/event coverage is blocked until cadence-trace-helper \
+         implements replay mode and emits resource_* / event NDJSON records."
+    } else {
+        ""
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -306,9 +327,30 @@ mod tests {
             .map(|e| e.path())
             .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
             .collect();
-        assert!(!ct_files.is_empty(), "expected at least one .ct file in output dir");
+        assert!(
+            !ct_files.is_empty(),
+            "expected at least one .ct file in output dir"
+        );
         let content = std::fs::read(&ct_files[0]).expect("read .ct file");
         assert!(content.len() >= 5, ".ct file too small");
-        assert_eq!(&content[..5], &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2], "CTFS magic bytes mismatch");
+        assert_eq!(
+            &content[..5],
+            &[0xC0u8, 0xDE, 0x72, 0xAC, 0xE2],
+            "CTFS magic bytes mismatch"
+        );
+    }
+
+    #[test]
+    fn test_replay_helper_missing_subcommand_diagnostic() {
+        let stderr = "error reading source file: open replay: no such file or directory";
+        let hint = replay_helper_boundary_hint(stderr);
+        assert!(
+            hint.contains("Replay helper API boundary"),
+            "expected explicit replay helper boundary diagnostic, got {hint:?}"
+        );
+        assert!(
+            hint.contains("resource_* / event NDJSON"),
+            "diagnostic should name the missing replay-side state/event schema, got {hint:?}"
+        );
     }
 }

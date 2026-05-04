@@ -180,7 +180,7 @@ pattern.
 
 ## Tests added
 
-`tests/test_ctfs_audit.rs` (8 cases):
+`tests/test_ctfs_audit.rs` (9 cases):
 
 * `test_ctfs_writer_produces_ct_container` — runs the tiny inline NDJSON
   fixture through `trace_program_from_events` with
@@ -211,9 +211,19 @@ pattern.
   `event` IPC shape for `emit MyEvent(...)` and asserts the in-memory
   low-level event is `EventLogKind::EvmEvent` with
   `CadenceEvent:MyEvent` metadata.
+* `test_replay_on_chain_state_and_event_ndjson_routes_to_special_events` —
+  synthesises the replay-side helper IPC contract for one on-chain resource
+  move and one Cadence event, then asserts the Rust converter emits both
+  `CadenceResourceMove:...` as `TraceLogEvent` and `CadenceEvent:...` as
+  `EvmEvent`.
 
 `src/tracer.rs` also has unit parser tests for the `error` NDJSON kind and
 for `call` records carrying `args`, plus the new `event` NDJSON kind.
+`src/replay.rs` has a focused diagnostic assertion for the current helper/API
+boundary: when the helper treats `replay` as a source-file path, the Rust
+error now explicitly states that live on-chain state/event coverage is blocked
+until `cadence-trace-helper` implements replay mode and emits
+`resource_*` / `event` NDJSON.
 
 The structural assertions are deliberately lightweight (CTFS magic +
 file-size) because verifying the embedded event-log content end-to-end
@@ -229,18 +239,21 @@ LIBRARY_PATH="/nix/store/5hg6h4zjxc3ax7j4ywn6ksd509yl4pmd-zstd-1.5.6/lib" \
 cargo test
 ```
 
-* lib unit tests: 30/30 passing
-* `test_ctfs_audit`: 8/8 passing
+* lib unit tests: 31/31 passing
+* `test_ctfs_audit`: 9/9 passing
 * `test_tracer` (existing integration suite): 11/11 passing, 4 ignored
   (Go-helper-required tests, ignored when `cadence-trace-helper` is not
   on `$PATH`)
 
-Total: 49/49 active passing, 0 regressions.
+Total: 51/51 active passing, 0 regressions.
 
 `cargo build --release` passes for the Rust crate. With the repo direnv
 loaded, `go test ./...` and `go build ./...` pass in `go-helper/`. A
 manual helper smoke with a temporary Cadence script containing
 `emit MyEvent(message: "done")` produced the expected `event` NDJSON record.
+The replay-side follow-up added a converter-level fixture for replay-shaped
+`resource_*` / `event` records and a unit diagnostic for the current missing
+helper replay subcommand; no live Access Node replay was run.
 
 `cargo clippy --release --all-targets` was not rerun in this event-surfacing
 pass; the previous audit note about four pre-existing `unnecessary_map_or`
@@ -267,12 +280,16 @@ audit-time verification; production CI should still go through
 
 ### Go-helper-side gaps
 
-* **Replay-side resource events**. The replay path (`replay.rs`)
-  consumes the same `parse_ndjson` pipeline, so the Rust side already
-  handles resource lifecycle events when present. Whether the Go
-  helper's `replay` mode actually emits `resource_*` / `event` records for on-chain
-  state changes is unverified — the replay subcommand has not been
-  exercised end-to-end against a real Flow Access Node in this audit.
+* **Replay-side helper/API boundary**. The replay path (`replay.rs`)
+  consumes the same `parse_ndjson` pipeline, and the focused audit test
+  now verifies that replay-shaped `resource_*` / `event` NDJSON is captured
+  by the Rust converter as `TraceLogEvent` / `EvmEvent`. Live on-chain replay
+  is still blocked one layer earlier: the current Go helper has no `replay`
+  subcommand, so `replay_transaction` invokes `cadence-trace-helper replay
+  ...` and the helper treats `replay` as a source-file path. The Rust error
+  now surfaces that exact boundary. Closing this requires implementing
+  helper-side replay mode that fetches/executes the transaction and emits the
+  same `resource_*` / `event` records pinned by the Rust audit test.
 
 ### Rust-side / cross-cutting gaps
 
@@ -310,7 +327,7 @@ audit-time verification; production CI should still go through
 Section 5.6's recorder list shows `codetracer-flow-recorder` as audited
 (gaps closed for default Ctfs CLI + resource-lifecycle structured-event
 routing + runtime-error Error routing + helper-side call args + Cadence
-`emit` event surfacing; replay-side on-chain state/event coverage remains
-unverified).
+`emit` event surfacing; replay-side Rust conversion is verified, live replay
+remains blocked by the helper lacking a replay subcommand).
 Audited recorder count:
 9 → 10.
