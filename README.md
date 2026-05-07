@@ -9,10 +9,17 @@ A recorder for Flow/Cadence smart contracts that produces [CodeTracer](https://g
 
 `codetracer-flow-recorder` executes Cadence programs via a Go helper
 binary (`cadence-trace-helper`), captures step-level execution traces
-with resource lifecycle tracking, and writes them in the CodeTracer trace
-format. Resource events (`resource_create`, `resource_move`,
-`resource_destroy`) are recorded with `@resource:Type#UUID` naming so
-you can follow the full lifecycle of Flow resources through the program.
+with resource lifecycle tracking, and writes them in the canonical
+CodeTracer CTFS multi-stream format. Resource events
+(`resource_create`, `resource_move`, `resource_destroy`) are recorded
+with `@resource:Type#UUID` naming so you can follow the full lifecycle
+of Flow resources through the program.
+
+The recorder is **CTFS-only** (see
+[`Recorder-CLI-Conventions.md`](../codetracer-specs/Recorder-CLI-Conventions.md)
+§4 in `codetracer-specs`). To convert a recorded `.ct` bundle to JSON
+or other human-readable forms, use `ct print` from
+[`codetracer-trace-format-nim`](../codetracer-trace-format-nim/).
 
 ### Building
 
@@ -32,22 +39,33 @@ cargo build
 #### Record a Cadence program
 
 ```bash
-codetracer-flow-recorder record <file.cdc> --out-dir <dir> [--format binary|json]
+codetracer-flow-recorder record <file.cdc> --out-dir <dir>
 ```
 
 Parses the `.cdc` source file, evaluates variable assignments through
 the Go tracer helper, captures the execution trace including resource
-lifecycle events, and writes CodeTracer trace files to `--out-dir`.
+lifecycle events, and writes a CTFS bundle to `--out-dir`.
 
 #### Replay a Flow on-chain transaction
 
 ```bash
-codetracer-flow-recorder replay <tx-hash> --out-dir <dir>
+codetracer-flow-recorder replay --tx-hash <tx-hash> --out-dir <dir>
 ```
 
 Fetches the transaction from a Flow Access Node, extracts its Cadence
 script and arguments, replays execution through the Go tracer helper,
-and writes CodeTracer trace files to `--out-dir`.
+and writes a CTFS bundle to `--out-dir`.
+
+#### Convert a recorded trace to JSON
+
+```bash
+ct print --json <out-dir>/trace.bin
+```
+
+`ct print` is shipped with `codetracer-trace-format-nim` and is the
+canonical conversion tool for human-readable output (see
+[`Recorder-CLI-Conventions.md`](../codetracer-specs/Recorder-CLI-Conventions.md)
+§4).
 
 ### Architecture
 
@@ -66,6 +84,8 @@ The recorder is structured around the following modules in `src/`:
 
 ```bash
 cargo test
+# or, end-to-end with the CLI convention guard:
+just test
 ```
 
 Test programs live in:
@@ -76,6 +96,9 @@ Test programs live in:
 
 | Variable | Description |
 |---|---|
+| `CODETRACER_FLOW_RECORDER_OUT_DIR` | Fallback for `--out-dir` when the CLI flag is omitted. The CLI flag always wins. |
+| `CODETRACER_FLOW_RECORDER_DISABLED` | Set to `1` or `true` to skip recording entirely. The recorder still validates the input but does not shell out to the Go helper or write any trace artefacts. |
+| `CODETRACER_FLOW_RECORDER_LOG_LEVEL` | Recorder log verbosity (advisory; the Flow recorder currently logs to stderr unconditionally). |
 | `CADENCE_HELPER_BIN` | Path to the `cadence-trace-helper` Go binary. Defaults to `cadence-trace-helper` on `$PATH`. Use `nix develop` to get it automatically. |
 
 ### Contributing

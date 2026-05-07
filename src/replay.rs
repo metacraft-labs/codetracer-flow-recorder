@@ -7,7 +7,6 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 use eyre::{eyre, Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -101,7 +100,7 @@ const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
 // Replay pipeline
 // ---------------------------------------------------------------------------
 
-/// Replay a Flow transaction and write CodeTracer trace output.
+/// Replay a Flow transaction and write a CodeTracer CTFS trace bundle.
 ///
 /// Pipeline:
 /// 1. Invoke the Go helper in `replay` mode with the transaction hash and
@@ -109,21 +108,19 @@ const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
 ///    Cadence script through the emulator in fork mode, and emits NDJSON
 ///    trace events on stdout.
 /// 2. Parse the NDJSON output.
-/// 3. Write CodeTracer trace files to `out_dir`.
-pub fn replay_transaction(
-    config: &ReplayConfig,
-    out_dir: &Path,
-    format: TraceEventsFileFormat,
-) -> Result<()> {
+/// 3. Write a CTFS bundle to `out_dir`.
+///
+/// The output format is fixed to CTFS — see
+/// `Recorder-CLI-Conventions.md` §4 in `codetracer-specs`.
+pub fn replay_transaction(config: &ReplayConfig, out_dir: &Path) -> Result<()> {
     let helper_bin =
         std::env::var(HELPER_BIN_ENV).unwrap_or_else(|_| DEFAULT_HELPER_BIN.to_string());
-    replay_transaction_with_helper(config, out_dir, format, &helper_bin)
+    replay_transaction_with_helper(config, out_dir, &helper_bin)
 }
 
 fn replay_transaction_with_helper(
     config: &ReplayConfig,
     out_dir: &Path,
-    format: TraceEventsFileFormat,
     helper_bin: &str,
 ) -> Result<()> {
     let mut cmd = Command::new(helper_bin);
@@ -177,7 +174,7 @@ fn replay_transaction_with_helper(
         .unwrap_or_else(|| Path::new("."))
         .join(format!("tx_{}.cdc", &config.tx_hash));
 
-    CadenceTracer::trace_program_from_events(&source_path, &events, out_dir, format)
+    CadenceTracer::trace_program_from_events(&source_path, &events, out_dir)
 }
 
 fn replay_helper_boundary_hint(stderr: &str) -> &'static str {
@@ -312,20 +309,15 @@ mod tests {
         let out_dir = tmp_dir.path().join("replay_traces");
         let source_path = PathBuf::from("tx_beef.cdc");
 
-        CadenceTracer::trace_program_from_events(
-            &source_path,
-            &events,
-            &out_dir,
-            TraceEventsFileFormat::Json,
-        )
-        .expect("trace_program_from_events should succeed");
+        CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+            .expect("trace_program_from_events should succeed");
 
         // Verify .ct output with CTFS magic bytes.
         let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
             .expect("read output dir")
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "ct"))
             .collect();
         assert!(
             !ct_files.is_empty(),

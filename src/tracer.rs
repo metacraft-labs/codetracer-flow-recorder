@@ -185,18 +185,25 @@ pub struct CadenceTracer {
 }
 
 impl CadenceTracer {
-    /// Trace a Cadence program and write CodeTracer output files.
+    /// Trace a Cadence program and write a CodeTracer CTFS bundle.
     ///
     /// 1. Shells out to the Go helper to execute the program and capture
     ///    NDJSON trace events.
     /// 2. Converts the trace events into CodeTracer format.
-    /// 3. Writes trace.json/trace.bin (depending on format), trace_metadata.json, trace_paths.json.
-    pub fn trace_program(
-        source_path: &Path,
-        _source_code: &str,
-        out_dir: &Path,
-        format: TraceEventsFileFormat,
-    ) -> Result<()> {
+    /// 3. Writes a `.ct` CTFS multi-stream container plus
+    ///    `trace_metadata.json` / `trace_paths.json` sidecars to `out_dir`.
+    ///
+    /// The output format is fixed to CTFS — see
+    /// `Recorder-CLI-Conventions.md` §4 in `codetracer-specs`.  Use
+    /// `ct print` (from `codetracer-trace-format-nim`) to convert the
+    /// produced bundle to JSON or other text forms.
+    pub fn trace_program(source_path: &Path, _source_code: &str, out_dir: &Path) -> Result<()> {
+        // CTFS-only.  Pre-2026-05-08 the recorder accepted a format
+        // parameter (`TraceEventsFileFormat::{Json,Binary,Ctfs}`) and the
+        // CLI exposed a `--format` flag.  The convention now mandates
+        // CTFS exclusively.
+        let format = TraceEventsFileFormat::Ctfs;
+
         // -- 1. Run the Go helper --
         let events = run_go_helper(source_path)?;
 
@@ -213,12 +220,8 @@ impl CadenceTracer {
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-        let events_filename = match format {
-            TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary
-            | TraceEventsFileFormat::BinaryV0
-            | TraceEventsFileFormat::Ctfs => "trace.bin",
-        };
+        // CTFS multi-stream container.
+        let events_filename = "trace.bin";
         let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
         let paths_path = out_dir.join("trace_paths.json");
@@ -255,13 +258,18 @@ impl CadenceTracer {
 
     /// Trace a Cadence program from pre-parsed NDJSON events.
     ///
-    /// This is used for testing without the Go helper binary.
+    /// This is used for testing without the Go helper binary.  Output is
+    /// always written in the canonical CTFS multi-stream format
+    /// (see `Recorder-CLI-Conventions.md` §4 in `codetracer-specs`).
     pub fn trace_program_from_events(
         source_path: &Path,
         events: &[TraceEvent],
         out_dir: &Path,
-        format: TraceEventsFileFormat,
     ) -> Result<()> {
+        // CTFS-only.  Pre-2026-05-08 this helper accepted a format
+        // parameter; the convention now mandates CTFS exclusively.
+        let format = TraceEventsFileFormat::Ctfs;
+
         eprintln!("Processing {} trace events", events.len());
 
         // Create the trace writer.
@@ -275,12 +283,8 @@ impl CadenceTracer {
         std::fs::create_dir_all(out_dir)
             .with_context(|| format!("cannot create output dir: {}", out_dir.display()))?;
 
-        let events_filename = match format {
-            TraceEventsFileFormat::Json => "trace.json",
-            TraceEventsFileFormat::Binary
-            | TraceEventsFileFormat::BinaryV0
-            | TraceEventsFileFormat::Ctfs => "trace.bin",
-        };
+        // CTFS multi-stream container.
+        let events_filename = "trace.bin";
         let events_path = out_dir.join(events_filename);
         let metadata_path = out_dir.join("trace_metadata.json");
         let paths_path = out_dir.join("trace_paths.json");
@@ -865,20 +869,15 @@ mod tests {
         let out_dir = tmp_dir.path().join("traces");
         let source_path = std::path::PathBuf::from("flow_test.cdc");
 
-        CadenceTracer::trace_program_from_events(
-            &source_path,
-            &events,
-            &out_dir,
-            TraceEventsFileFormat::Json,
-        )
-        .expect("trace_program_from_events should succeed");
+        CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+            .expect("trace_program_from_events should succeed");
 
         // Verify .ct output with CTFS magic bytes.
         let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
             .expect("read output dir")
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "ct"))
             .collect();
         assert!(
             !ct_files.is_empty(),
@@ -908,20 +907,15 @@ mod tests {
         let out_dir = tmp_dir.path().join("traces");
         let source_path = std::path::PathBuf::from("test.cdc");
 
-        CadenceTracer::trace_program_from_events(
-            &source_path,
-            &events,
-            &out_dir,
-            TraceEventsFileFormat::Json,
-        )
-        .expect("should succeed");
+        CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+            .expect("should succeed");
 
         // Verify .ct output with CTFS magic bytes.
         let ct_files: Vec<_> = std::fs::read_dir(&out_dir)
             .expect("read output dir")
             .filter_map(|e| e.ok())
             .map(|e| e.path())
-            .filter(|p| p.extension().map_or(false, |ext| ext == "ct"))
+            .filter(|p| p.extension().is_some_and(|ext| ext == "ct"))
             .collect();
         assert!(
             !ct_files.is_empty(),

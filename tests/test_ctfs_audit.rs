@@ -2,11 +2,11 @@
 //!
 //! These tests cover the post-fix invariants from `AUDIT-CTFS-2026-05.md`:
 //!
-//! * The CLI advertises `ctfs` as a `--format` option and defaults to it for
-//!   both `record` and `replay` subcommands.
+//! * The CLI is CTFS-only — `--format` is rejected by clap and does not
+//!   appear in `--help` output.  `--help` mentions `ct print` (the
+//!   canonical conversion tool shipped with `codetracer-trace-format-nim`).
 //! * The recorder produces a `.ct` container starting with the canonical
-//!   CTFS magic bytes (0xC0 0xDE 0x72 0xAC 0xE2) when invoked with
-//!   `TraceEventsFileFormat::Ctfs`.
+//!   CTFS magic bytes (0xC0 0xDE 0x72 0xAC 0xE2).
 //! * Resource lifecycle events (create / move / destroy) complete the
 //!   `register_special_event` route without crashing the converter and the
 //!   `.ct` container is materially populated.
@@ -28,7 +28,6 @@ use std::process::Command;
 
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer};
 use codetracer_trace_types::{EventLogKind, TraceLowLevelEvent};
-use codetracer_trace_writer_nim::TraceEventsFileFormat;
 
 /// Canonical CTFS multi-stream container magic bytes.
 const CTFS_MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
@@ -92,13 +91,8 @@ fn test_ctfs_writer_produces_ct_container() {
     let out_dir = tmp.path().join("traces");
     let source_path = PathBuf::from("flow_test.cdc");
 
-    CadenceTracer::trace_program_from_events(
-        &source_path,
-        &events,
-        &out_dir,
-        TraceEventsFileFormat::Ctfs,
-    )
-    .expect("trace_program_from_events should succeed");
+    CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+        .expect("trace_program_from_events should succeed");
 
     let ct = first_ct_file(&out_dir);
     assert_ctfs_magic(&ct);
@@ -109,46 +103,58 @@ fn test_ctfs_writer_produces_ct_container() {
     );
 }
 
+/// `--format` must not appear in any `--help` output (CTFS-only contract).
+/// Replaces the pre-2026-05-08 `test_ctfs_format_advertised_in_help` and
+/// `test_ctfs_format_default_for_replay` tests, which would have locked
+/// in the regression.
+///
+/// Convention: `Recorder-CLI-Conventions.md` §4 — recorders are
+/// CTFS-only.  Same shape as the Cairo / Cardano / Circom 2026-05-08
+/// audit follow-ups.
 #[test]
-fn test_ctfs_format_advertised_in_help() {
-    // CLI smoke test: `record --help` advertises `ctfs` as a --format value
-    // and `[default: ctfs]` so the audit's (f) fix surfaces to the user.
-    let out = Command::new(recorder_bin())
-        .args(["record", "--help"])
-        .output()
-        .expect("run --help");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let combined = format!("{stdout}\n{stderr}");
+fn test_no_format_flag_in_help() {
+    for subcmd in [None, Some("record"), Some("replay")] {
+        let mut cmd = Command::new(recorder_bin());
+        if let Some(s) = subcmd {
+            cmd.arg(s);
+        }
+        cmd.arg("--help");
 
-    assert!(
-        combined.contains("ctfs"),
-        "record --help must advertise ctfs format; got:\n{combined}"
-    );
-    assert!(
-        combined.contains("[default: ctfs]"),
-        "record --help must default to ctfs; got:\n{combined}"
-    );
+        let output = cmd.output().expect("failed to run --help");
+        assert!(
+            output.status.success(),
+            "--help (subcmd={:?}) should exit 0",
+            subcmd
+        );
+
+        let help = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !help.contains("--format"),
+            "--help (subcmd={:?}) must not advertise --format; got:\n{help}",
+            subcmd
+        );
+        assert!(
+            !help.contains("CODETRACER_FORMAT"),
+            "--help (subcmd={:?}) must not advertise CODETRACER_FORMAT; got:\n{help}",
+            subcmd
+        );
+    }
 }
 
+/// `--help` must mention `ct print` so users know where to go for
+/// human-readable conversion of the recorded CTFS bundle.
 #[test]
-fn test_ctfs_format_default_for_replay() {
-    // Same guarantee for the `replay` subcommand: ctfs offered + default.
-    let out = Command::new(recorder_bin())
-        .args(["replay", "--help"])
+fn test_help_mentions_ct_print() {
+    let output = Command::new(recorder_bin())
+        .arg("--help")
         .output()
-        .expect("run replay --help");
-    let stdout = String::from_utf8_lossy(&out.stdout);
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    let combined = format!("{stdout}\n{stderr}");
+        .expect("failed to run --help");
+    assert!(output.status.success(), "--help should exit 0");
 
+    let help = String::from_utf8_lossy(&output.stdout);
     assert!(
-        combined.contains("ctfs"),
-        "replay --help must advertise ctfs format; got:\n{combined}"
-    );
-    assert!(
-        combined.contains("[default: ctfs]"),
-        "replay --help must default to ctfs; got:\n{combined}"
+        help.contains("ct print"),
+        "--help must mention `ct print` as the conversion tool; got:\n{help}"
     );
 }
 
@@ -181,13 +187,8 @@ fn test_resource_lifecycle_emits_special_events() {
     let out_dir = tmp.path().join("traces");
     let source_path = PathBuf::from("resource_test.cdc");
 
-    CadenceTracer::trace_program_from_events(
-        &source_path,
-        &events,
-        &out_dir,
-        TraceEventsFileFormat::Ctfs,
-    )
-    .expect("converter must succeed when resource lifecycle events are present");
+    CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+        .expect("converter must succeed when resource lifecycle events are present");
 
     let ct = first_ct_file(&out_dir);
     assert_ctfs_magic(&ct);
@@ -212,13 +213,8 @@ fn test_steps_emitted_for_variable_assignments() {
     let out_dir = tmp.path().join("traces");
     let source_path = PathBuf::from("basic.cdc");
 
-    CadenceTracer::trace_program_from_events(
-        &source_path,
-        &events,
-        &out_dir,
-        TraceEventsFileFormat::Ctfs,
-    )
-    .expect("trace_program_from_events should succeed");
+    CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+        .expect("trace_program_from_events should succeed");
 
     let ct = first_ct_file(&out_dir);
     assert_ctfs_magic(&ct);
@@ -243,13 +239,8 @@ fn test_cadence_runtime_error_emits_special_event() {
     let out_dir = tmp.path().join("traces");
     let source_path = PathBuf::from("runtime_error.cdc");
 
-    CadenceTracer::trace_program_from_events(
-        &source_path,
-        &events,
-        &out_dir,
-        TraceEventsFileFormat::Ctfs,
-    )
-    .expect("runtime error records should be converted into trace Error events");
+    CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+        .expect("runtime error records should be converted into trace Error events");
 
     let ct = first_ct_file(&out_dir);
     assert_ctfs_magic(&ct);
