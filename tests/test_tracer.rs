@@ -305,12 +305,27 @@ fn test_nested_resource_tracking() {
 
 /// Drive the NDJSON-based tracer with the canonical `flow_test.cdc`
 /// fixture, then convert the produced `.ct` container to JSON via
-/// `ct-print --json` and assert on the textual representation.
+/// `ct-print` and assert on:
+///
+/// 1. **Structural anchors** (legacy layer): `ct-print --json` output
+///    contains the source filename / variable names / canonical Cadence
+///    `Int` values somewhere in the textual rendering.
+/// 2. **Exact decoded values** (the layer enabled by `ct-print --full`):
+///    the `flow_test.cdc` program executes `(10 + 32) * 2 + 10 = 94`
+///    via the `compute()` function, with intermediate let-bindings
+///    `a=10`, `b=32`, `sum_val=42`, `doubled=84`, `final_result=94`.
+///    Each binding must surface in the trace as a step event with a
+///    decoded `Int` ValueRecord whose `i` field matches the literal
+///    value from the source program.
 ///
 /// Pre-2026-05-08 a similar assertion was made directly on a recorder-
 /// emitted `trace.json` file (via `--format json`).  The convention now
 /// mandates CTFS-only output; `ct print` is the canonical conversion
-/// tool.  See `Recorder-CLI-Conventions.md` §4.
+/// tool.  See `Recorder-CLI-Conventions.md` §4.  `ct-print --full`
+/// (added 2026-05 in `codetracer-trace-format-nim`) is what enables the
+/// exact-value layer — its output is a deterministic JSON document with
+/// every CBOR `ValueRecord` decoded to a structured form like
+/// `{"kind":"Int","i":42,"type_id":7}`.
 ///
 /// Skips gracefully (with a printed `SKIP:` line) when `ct-print` is
 /// not present (e.g. when the crate is built outside the metacraft
@@ -343,6 +358,11 @@ fn test_recorded_trace_via_ct_print_json() {
         out_dir
     );
 
+    // -----------------------------------------------------------------
+    // Layer 1 (legacy): ct-print --json — substring presence checks.
+    // Kept as a safety net so a regression in the textual rendering
+    // is caught even if --full's JSON shape evolves.
+    // -----------------------------------------------------------------
     let output = Command::new(&ct_print)
         .args(["--json"])
         .arg(&ct_files[0])
@@ -351,39 +371,185 @@ fn test_recorded_trace_via_ct_print_json() {
 
     assert!(
         output.status.success(),
-        "ct-print should succeed; stderr: {}",
+        "ct-print --json should succeed; stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(!stdout.is_empty(), "ct-print --json produced empty output");
-
-    // The compute() function in flow_test.cdc walks five `let` bindings
-    // (`a`, `b`, `sum_val`, `doubled`, `final_result`) and returns `94`.
-    // ct-print's JSON output owns its schema — owned by
-    // codetracer-trace-format-nim and may evolve — so we assert on
-    // structural anchors that the recorder must surface for any
-    // CodeTracer consumer to function:
-    //   * the source path and program name in the metadata,
-    //   * the `compute` function name in the function table,
-    //   * each let-binding name in the values stream.
-    // (Note: the flow recorder currently emits Variable records via
-    // `register_variable_with_full_value` whose integer payload doesn't
-    // round-trip through `ct-print --json` today — pre-existing
-    // limitation unrelated to the convention compliance work.  Same
-    // shape as the cardano / circom 2026-05-08 follow-ups.)
+    let stdout_json = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("flow_test.cdc"),
-        "ct-print --json output should mention the source file; got:\n{stdout}"
+        !stdout_json.is_empty(),
+        "ct-print --json produced empty output"
+    );
+
+    // Source path, function name, every let-binding name must surface.
+    assert!(
+        stdout_json.contains("flow_test.cdc"),
+        "ct-print --json output should mention the source file; got:\n{stdout_json}"
     );
     assert!(
-        stdout.contains("\"compute\""),
-        "ct-print --json output should mention the `compute` function; got:\n{stdout}"
+        stdout_json.contains("\"compute\""),
+        "ct-print --json output should mention the `compute` function; got:\n{stdout_json}"
     );
     for varname in ["a", "b", "sum_val", "doubled", "final_result"] {
         assert!(
-            stdout.contains(&format!("\"{varname}\"")),
-            "ct-print --json output should mention the `{varname}` variable; got:\n{stdout}"
+            stdout_json.contains(&format!("\"{varname}\"")),
+            "ct-print --json output should mention the `{varname}` variable; got:\n{stdout_json}"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Layer 2 (the upgrade): ct-print --full — exact decoded values.
+    // -----------------------------------------------------------------
+    let full_output = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct_files[0])
+        .output()
+        .expect("failed to run ct-print --full");
+
+    assert!(
+        full_output.status.success(),
+        "ct-print --full should succeed; stderr: {}",
+        String::from_utf8_lossy(&full_output.stderr)
+    );
+
+    let doc: serde_json::Value = serde_json::from_slice(&full_output.stdout)
+        .expect("ct-print --full should emit valid JSON");
+
+    // ----- Function table: compute() and main() must both appear ------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        functions.iter().any(|f| f.ends_with("compute")),
+        "expected `compute` in functions table; got {:?}",
+        functions
+    );
+    assert!(
+        functions.iter().any(|f| f.ends_with("main")),
+        "expected `main` in functions table; got {:?}",
+        functions
+    );
+
+    // ----- Path table: the canonical fixture path must appear ---------
+    let paths: Vec<&str> = doc["paths"]
+        .as_array()
+        .expect("paths array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        paths.iter().any(|p| p.ends_with("flow_test.cdc")),
+        "expected flow_test.cdc in paths table; got {:?}",
+        paths
+    );
+
+    // ----- Step / call counts ----------------------------------------
+    // The canonical NDJSON drives 8 step events (one per `step` line in
+    // `flow_test_ndjson`, including the entry-point step on line 11 of
+    // main and the post-return step on line 7) and 2 call_entry events
+    // (main entered first at depth 0, then compute at depth 1).  These
+    // are stable properties of the canonical fixture — if they change,
+    // that's a real regression to investigate, not a flake.
+    let counts = &doc["counts"];
+    assert_eq!(
+        counts["steps"].as_u64(),
+        Some(8),
+        "expected 8 step events for flow_test.cdc; counts={counts}",
+    );
+    assert_eq!(
+        counts["calls"].as_u64(),
+        Some(2),
+        "expected 2 call events (main + compute); counts={counts}",
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+
+    // ----- Call sequence: main first, then compute --------------------
+    // The recorder emits `call:main` then `call:compute` in the NDJSON
+    // event stream (main calls compute), so call_entry events appear in
+    // that order in the trace.
+    let call_sequence: Vec<&str> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter_map(|e| e["function"].as_str())
+        .collect();
+    assert_eq!(
+        call_sequence.len(),
+        2,
+        "expected exactly 2 call_entry events; got {:?}",
+        call_sequence
+    );
+    assert!(
+        call_sequence[0].ends_with("main"),
+        "expected first call to be `main`; got {:?}",
+        call_sequence
+    );
+    assert!(
+        call_sequence[1].ends_with("compute"),
+        "expected second call to be `compute`; got {:?}",
+        call_sequence
+    );
+
+    // ----- Exact decoded variable values ------------------------------
+    // Collect every (varname, i64) pair surfaced by step events.  These
+    // come from the recorder writing `ValueRecord::Int` CBOR blobs, then
+    // ct-print --full decoding them back to `{"kind":"Int","i":<n>,...}`.
+    let observed_vars: Vec<(String, i64)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| {
+            e["vars"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+        })
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            let value = &v["value"];
+            // The flow recorder encodes Cadence `Int` values as
+            // ValueRecord::Int.  If something else surfaces (e.g.
+            // BigInt for out-of-range Cadence integers, Sequence for
+            // arrays, etc.), fail loudly so the test author can decide
+            // whether to extend the assertions or accept the new
+            // variant — never silently weaken the check.
+            assert_eq!(
+                value["kind"].as_str(),
+                Some("Int"),
+                "variable `{}` should decode as Int, got {}; \
+                 if a new ValueRecord variant has landed for Cadence \
+                 values, extend this test to assert on it explicitly \
+                 rather than weakening the check",
+                name,
+                value
+            );
+            let i = value["i"]
+                .as_i64()
+                .unwrap_or_else(|| panic!("Int.i must be i64 for `{name}`; got {value}"));
+            Some((name, i))
+        })
+        .collect();
+
+    // The canonical flow: a=10, b=32, sum_val=a+b=42, doubled=sum_val*2=84,
+    // final_result=doubled+a=94.  These mirror the literal values and
+    // arithmetic in `test-programs/cadence/flow_test.cdc` lines 2-7.
+    let expected: &[(&str, i64)] = &[
+        ("a", 10),
+        ("b", 32),
+        ("sum_val", 42),
+        ("doubled", 84),
+        ("final_result", 94),
+    ];
+    for (name, value) in expected {
+        assert!(
+            observed_vars
+                .iter()
+                .any(|(n, v)| n == name && v == value),
+            "expected step variable `{name}` = {value} in --full output; \
+             observed = {observed_vars:?}"
         );
     }
 }
