@@ -1,0 +1,26 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"error_paths_test.cdc","line":31}
+{"type":"call","name":"compute"}
+{"type":"step","file":"error_paths_test.cdc","line":27}
+{"type":"call","name":"safe_compute"}
+{"type":"step","file":"error_paths_test.cdc","line":21}
+{"type":"variable","name":"a","value":"10","cadence_type":"Int"}
+{"type":"step","file":"error_paths_test.cdc","line":22}
+{"type":"variable","name":"b","value":"5","cadence_type":"Int"}
+{"type":"step","file":"error_paths_test.cdc","line":23}
+{"type":"call","name":"divide_strict","args":[{"name":"a","value":"10","cadence_type":"Int"},{"name":"b","value":"5","cadence_type":"Int"}]}
+{"type":"step","file":"error_paths_test.cdc","line":3}
+{"type":"step","file":"error_paths_test.cdc","line":9}
+{"type":"step","file":"error_paths_test.cdc","line":6}
+{"type":"return","value":"2","cadence_type":"Int"}
+{"type":"variable","name":"q","value":"2","cadence_type":"Int"}
+{"type":"step","file":"error_paths_test.cdc","line":24}
+{"type":"return","value":"3","cadence_type":"Int"}
+{"type":"step","file":"error_paths_test.cdc","line":28}
+{"type":"return","value":"3","cadence_type":"Int"}
+{"type":"step","file":"error_paths_test.cdc","line":32}
+{"type":"return","value":"3","cadence_type":"Int"}
+{"type":"call","name":"panicking_call"}
+{"type":"step","file":"error_paths_test.cdc","line":13}
+{"type":"error","message":"intentional panic for trace coverage"}
+{"type":"return","value":"","cadence_type":"Void"}

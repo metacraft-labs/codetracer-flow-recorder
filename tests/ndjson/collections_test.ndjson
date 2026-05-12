@@ -1,0 +1,38 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"collections_test.cdc","line":63}
+{"type":"call","name":"compute"}
+{"type":"step","file":"collections_test.cdc","line":48}
+{"type":"variable","name":"xs","value":"[1, 2, 3, 4]","cadence_type":"[Int]"}
+{"type":"step","file":"collections_test.cdc","line":49}
+{"type":"call","name":"array_sum","args":[{"name":"xs","value":"[1, 2, 3, 4]","cadence_type":"[Int]"}]}
+{"type":"step","file":"collections_test.cdc","line":21}
+{"type":"variable","name":"total","value":"0","cadence_type":"Int"}
+{"type":"step","file":"collections_test.cdc","line":25}
+{"type":"return","value":"10","cadence_type":"Int"}
+{"type":"variable","name":"total","value":"10","cadence_type":"Int"}
+{"type":"step","file":"collections_test.cdc","line":51}
+{"type":"variable","name":"prices","value":"{\"apple\": 30, \"banana\": 10}","cadence_type":"{String: Int}"}
+{"type":"step","file":"collections_test.cdc","line":52}
+{"type":"call","name":"dict_lookup","args":[{"name":"d","value":"{\"apple\": 30, \"banana\": 10}","cadence_type":"{String: Int}"},{"name":"key","value":"apple","cadence_type":"String"}]}
+{"type":"step","file":"collections_test.cdc","line":29}
+{"type":"step","file":"collections_test.cdc","line":30}
+{"type":"return","value":"30","cadence_type":"Int"}
+{"type":"variable","name":"apple_price","value":"30","cadence_type":"Int"}
+{"type":"step","file":"collections_test.cdc","line":54}
+{"type":"variable","name":"p","value":"S.Point(x: 3, y: 4)","cadence_type":"S.Point"}
+{"type":"step","file":"collections_test.cdc","line":55}
+{"type":"call","name":"point_distance_sq","args":[{"name":"p","value":"S.Point(x: 3, y: 4)","cadence_type":"S.Point"}]}
+{"type":"step","file":"collections_test.cdc","line":36}
+{"type":"return","value":"25","cadence_type":"Int"}
+{"type":"variable","name":"dist_sq","value":"25","cadence_type":"Int"}
+{"type":"step","file":"collections_test.cdc","line":57}
+{"type":"variable","name":"some_val","value":"7","cadence_type":"Int?"}
+{"type":"step","file":"collections_test.cdc","line":58}
+{"type":"call","name":"maybe_double","args":[{"name":"o","value":"7","cadence_type":"Int?"}]}
+{"type":"step","file":"collections_test.cdc","line":40}
+{"type":"step","file":"collections_test.cdc","line":41}
+{"type":"return","value":"14","cadence_type":"Int"}
+{"type":"variable","name":"doubled","value":"14","cadence_type":"Int"}
+{"type":"step","file":"collections_test.cdc","line":60}
+{"type":"return","value":"79","cadence_type":"Int"}
+{"type":"return","value":"79","cadence_type":"Int"}
