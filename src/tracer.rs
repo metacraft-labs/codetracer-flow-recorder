@@ -17,7 +17,7 @@ use codetracer_trace_types::{
 };
 use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::{create_trace_writer, TraceEventsFileFormat};
+use codetracer_trace_writer_nim::{create_trace_writer, StreamingValueEncoder, TraceEventsFileFormat};
 use eyre::{eyre, Context, Result};
 use serde::Deserialize;
 
@@ -182,6 +182,12 @@ pub struct CadenceTracer {
     writer: Box<dyn TraceWriter + Send>,
     /// Registered type IDs for Cadence types.
     type_ids: HashMap<String, codetracer_trace_types::TypeId>,
+    /// Reusable streaming encoder for typed leaf values (Bool, String,
+    /// ...) that the writer's `register_variable_with_full_value`
+    /// otherwise downgrades to `ValueRecord::Raw`.  Encoding the value
+    /// to CBOR ourselves and routing it through `register_variable_cbor`
+    /// preserves the typed `ValueRecord` variant tag end-to-end.
+    streaming_encoder: StreamingValueEncoder,
 }
 
 impl CadenceTracer {
@@ -214,6 +220,7 @@ impl CadenceTracer {
         let mut tracer = CadenceTracer {
             writer: create_trace_writer(&program_str, &[], format),
             type_ids: HashMap::new(),
+            streaming_encoder: StreamingValueEncoder::new(),
         };
 
         // -- 3. Initialise output files --
@@ -277,6 +284,7 @@ impl CadenceTracer {
         let mut tracer = CadenceTracer {
             writer: create_trace_writer(&program_str, &[], format),
             type_ids: HashMap::new(),
+            streaming_encoder: StreamingValueEncoder::new(),
         };
 
         // Initialise output files.
@@ -332,6 +340,7 @@ impl CadenceTracer {
         let mut tracer = CadenceTracer {
             writer: Box::new(NonStreamingTraceWriter::new(&program_str, &[])),
             type_ids: HashMap::new(),
+            streaming_encoder: StreamingValueEncoder::new(),
         };
 
         TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
@@ -358,11 +367,7 @@ impl CadenceTracer {
                     cadence_type,
                 } => {
                     let val_record = self.value_record(value, cadence_type.as_deref());
-                    TraceWriter::register_variable_with_full_value(
-                        &mut *self.writer,
-                        name,
-                        val_record,
-                    );
+                    self.register_typed_variable(name, val_record);
                 }
                 TraceEvent::Call { name, args } => {
                     let fn_id = TraceWriter::ensure_function_id(
@@ -374,7 +379,7 @@ impl CadenceTracer {
                     let mut call_args: Vec<FullValueRecord> = Vec::with_capacity(args.len());
                     for arg in args {
                         let val_record = self.value_record(&arg.value, arg.cadence_type.as_deref());
-                        let full_arg = TraceWriter::arg(&mut *self.writer, &arg.name, val_record);
+                        let full_arg = self.register_typed_arg(&arg.name, val_record);
                         call_args.push(full_arg);
                     }
                     TraceWriter::register_call(&mut *self.writer, fn_id, call_args);
@@ -383,28 +388,13 @@ impl CadenceTracer {
                     value,
                     cadence_type,
                 } => {
-                    let type_name = cadence_type.as_deref().unwrap_or("Int");
-                    let type_id = self
-                        .type_ids
-                        .get(type_name)
-                        .copied()
-                        .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
-
                     match value.as_deref() {
                         None | Some("") | Some("nil") | Some("Void") => {
                             TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
                         }
                         Some(v) => {
-                            if let Ok(i) = v.parse::<i64>() {
-                                let val = ValueRecord::Int { i, type_id };
-                                TraceWriter::register_return(&mut *self.writer, val);
-                            } else {
-                                let val = ValueRecord::String {
-                                    text: v.to_string(),
-                                    type_id,
-                                };
-                                TraceWriter::register_return(&mut *self.writer, val);
-                            }
+                            let val = self.value_record(v, cadence_type.as_deref());
+                            self.register_typed_return(val);
                         }
                     }
                 }
@@ -444,11 +434,7 @@ impl CadenceTracer {
                         text: format!("created(owner={})", owner),
                         type_id,
                     };
-                    TraceWriter::register_variable_with_full_value(
-                        &mut *self.writer,
-                        &var_name,
-                        val,
-                    );
+                    self.register_typed_variable(&var_name, val);
 
                     // Route through the structured event log too so the multi-stream
                     // IO event reader captures the resource lifecycle, not just the
@@ -479,11 +465,7 @@ impl CadenceTracer {
                         text: format!("moved({} -> {})", from_owner, to_owner),
                         type_id,
                     };
-                    TraceWriter::register_variable_with_full_value(
-                        &mut *self.writer,
-                        &var_name,
-                        val,
-                    );
+                    self.register_typed_variable(&var_name, val);
 
                     // Structured-event mirror (see ResourceCreate above).
                     TraceWriter::register_special_event(
@@ -511,11 +493,7 @@ impl CadenceTracer {
                         text: format!("destroyed(owner={})", owner),
                         type_id,
                     };
-                    TraceWriter::register_variable_with_full_value(
-                        &mut *self.writer,
-                        &var_name,
-                        val,
-                    );
+                    self.register_typed_variable(&var_name, val);
 
                     // Structured-event mirror (see ResourceCreate above).
                     TraceWriter::register_special_event(
@@ -546,6 +524,17 @@ impl CadenceTracer {
         type_id
     }
 
+    /// Decode a NDJSON `value` string into a typed `ValueRecord`, using
+    /// the helper-side `cadence_type` discriminator when present.
+    ///
+    /// Spec: every typed leaf MUST surface as its dedicated
+    /// `ValueRecord` variant — `Bool` as `Bool { b }`, `String` as
+    /// `String { text }`, integer types as `Int { i }`.  Falling back to
+    /// `Raw` (or to `String` for Bools) violates
+    /// `metacraft-specs/policies/recorder-test-requirements.md` §1.
+    /// Only genuinely unrecognised types fall through to a stringified
+    /// `Raw` representation — and even those should be tightened up as
+    /// the recorder learns more Cadence types.
     fn value_record(&self, value: &str, cadence_type: Option<&str>) -> ValueRecord {
         let type_name = cadence_type.unwrap_or("Int");
         let type_id = self
@@ -554,13 +543,124 @@ impl CadenceTracer {
             .copied()
             .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
 
-        if let Ok(i) = value.parse::<i64>() {
-            ValueRecord::Int { i, type_id }
-        } else {
-            ValueRecord::String {
+        match cadence_type {
+            // Cadence Bools come as the literal strings "true" / "false".
+            Some("Bool") => match value {
+                "true" => ValueRecord::Bool { b: true, type_id },
+                "false" => ValueRecord::Bool { b: false, type_id },
+                _ => ValueRecord::Raw {
+                    r: value.to_string(),
+                    type_id,
+                },
+            },
+            // Cadence Strings round-trip verbatim.
+            Some("String") => ValueRecord::String {
                 text: value.to_string(),
                 type_id,
+            },
+            // Numeric types parse to i64 when they fit (this is the same
+            // set the previous implementation handled implicitly via the
+            // `value.parse::<i64>()` branch).
+            Some(t)
+                if matches!(
+                    t,
+                    "Int"
+                        | "Int8"
+                        | "Int16"
+                        | "Int32"
+                        | "Int64"
+                        | "UInt"
+                        | "UInt8"
+                        | "UInt16"
+                        | "UInt32"
+                        | "UInt64"
+                        | "Word8"
+                        | "Word16"
+                        | "Word32"
+                        | "Word64"
+                ) =>
+            {
+                if let Ok(i) = value.parse::<i64>() {
+                    ValueRecord::Int { i, type_id }
+                } else {
+                    ValueRecord::Raw {
+                        r: value.to_string(),
+                        type_id,
+                    }
+                }
             }
+            // No (or unknown) `cadence_type` discriminator: best-effort
+            // numeric parse, otherwise leave as a stringified Raw so the
+            // ct-print decoder treats the bytes as opaque rather than as
+            // a typed String.
+            _ => {
+                if let Ok(i) = value.parse::<i64>() {
+                    ValueRecord::Int { i, type_id }
+                } else {
+                    ValueRecord::Raw {
+                        r: value.to_string(),
+                        type_id,
+                    }
+                }
+            }
+        }
+    }
+
+    /// Register a step-local variable, preserving the value's typed
+    /// `ValueRecord` variant tag.
+    ///
+    /// The Nim writer's `register_variable_with_full_value` only
+    /// special-cases `Int` / `Sequence` / `Tuple` / `Struct`; every
+    /// other variant — including `Bool` and `String` — is downgraded to
+    /// a stringified `Raw` payload that the reader cannot tell apart
+    /// from a real `ValueRecord::Raw`.  We bypass that downgrade for
+    /// the typed leaf variants by encoding the value to CBOR via the
+    /// streaming encoder (which honours the variant tag) and routing
+    /// the bytes through `register_variable_cbor`.
+    fn register_typed_variable(&mut self, name: &str, value: ValueRecord) {
+        match &value {
+            ValueRecord::Bool { .. } | ValueRecord::String { .. } => {
+                let cbor = self.streaming_encoder.encode(&value).to_vec();
+                TraceWriter::register_variable_cbor(&mut *self.writer, name, &cbor);
+            }
+            _ => {
+                TraceWriter::register_variable_with_full_value(&mut *self.writer, name, value);
+            }
+        }
+    }
+
+    /// Register a return value, preserving the typed `ValueRecord`
+    /// variant tag.  Same rationale as `register_typed_variable` — the
+    /// Nim writer's `register_return` downgrades non-Int leaves to
+    /// stringified Raw, so we route Bool/String through the streaming
+    /// encoder + `register_return_cbor` instead.
+    fn register_typed_return(&mut self, value: ValueRecord) {
+        match &value {
+            ValueRecord::Bool { .. } | ValueRecord::String { .. } => {
+                let cbor = self.streaming_encoder.encode(&value).to_vec();
+                TraceWriter::register_return_cbor(&mut *self.writer, &cbor);
+            }
+            _ => {
+                TraceWriter::register_return(&mut *self.writer, value);
+            }
+        }
+    }
+
+    /// Stage a typed call argument both as a step-local (so it appears
+    /// in the locals pane for the call site) and on the call record's
+    /// pending-args buffer (so the calltrace pane shows
+    /// `f(name=value)`).
+    ///
+    /// Mirrors the writer's `arg()` helper but routes Bool / String
+    /// through the typed-CBOR path so the variant tag survives the
+    /// round-trip — see `register_typed_variable` for the rationale.
+    fn register_typed_arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
+        let cbor = self.streaming_encoder.encode(&value).to_vec();
+        self.register_typed_variable(name, value.clone());
+        TraceWriter::register_call_arg(&mut *self.writer, name, &cbor);
+        FullValueRecord {
+            variable_id: codetracer_trace_types::VariableId(0),
+            value,
         }
     }
 }

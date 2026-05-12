@@ -956,6 +956,45 @@ fn observed_raw_var_sequence(
     out
 }
 
+/// Decode (varname, text) pairs for variables surfaced as a typed
+/// `ValueRecord::String` (post-typed-encoding shape for Cadence
+/// `String` values).  Strict on the variant tag — the Raw fallback is
+/// captured separately by `observed_raw_var_sequence`.
+fn observed_string_var_sequence(
+    doc: &serde_json::Value,
+    string_only: &[&str],
+) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for ev in doc["events"].as_array().expect("events array") {
+        if ev["kind"] != "step" {
+            continue;
+        }
+        let Some(vars) = ev["vars"].as_array() else {
+            continue;
+        };
+        for v in vars {
+            let name = v["varname"].as_str().expect("varname str").to_string();
+            if !string_only.iter().any(|n| *n == name) {
+                continue;
+            }
+            let value = &v["value"];
+            assert_eq!(
+                value["kind"].as_str(),
+                Some("String"),
+                "variable `{}` should decode as `ValueRecord::String` \
+                 (typed Cadence String), got {}",
+                name,
+                value
+            );
+            let text = value["text"]
+                .as_str()
+                .unwrap_or_else(|| panic!("String.text must be string for `{name}`; got {value}"));
+            out.push((name, text.to_string()));
+        }
+    }
+    out
+}
+
 /// Decode the i64 return value off every `call_exit` event in order.
 /// Asserts the kind is `Int` (or `Void` — we map Void to `None`).
 fn observed_int_returns(doc: &serde_json::Value) -> Vec<Option<i64>> {
@@ -1256,25 +1295,25 @@ fn test_control_flow_test_via_ct_print_full() {
         expected_ints
     );
 
-    // ----- String/Bool variables surface as Raw today ----------------
-    // RECORDER BUG: Cadence Strings should decode as `String { text }`,
-    // Bools as `Bool { b }`.  The Flow recorder routes anything that
-    // isn't a parseable i64 through `ValueRecord::String`, but on the
-    // read side ct-print decodes those CBOR bytes as `Raw`.  Pinned
-    // here as the present-day shape; the `#[ignore]`d sibling test
-    // below captures the spec-compliant expectation.
+    // ----- String variables surface as typed `String { text }` ---------
+    // After the typed-encoding fix, Cadence Strings decode as
+    // `ValueRecord::String { text }` (and Bools as `Bool { b }`) rather
+    // than the legacy stringified `Raw` payload.  Pinned exactly so any
+    // future regression to `Raw` is caught here, not just by the
+    // dedicated `test_control_flow_test_strings_decode_as_string`.
     assert_eq!(
-        observed_raw_var_sequence(&doc, &["sign_label", "switch_result"]),
+        observed_string_var_sequence(&doc, &["sign_label", "switch_result"]),
         vec![
             ("sign_label".into(), "small".into()),
             ("switch_result".into(), "small".into()),
         ],
     );
 
-    // ----- Return values: Int returns where applicable ---------------
-    // Exit order: classify(Raw "small"), while_sum=6, for_sum=10,
-    // switch_label(Raw "small"), early_return=999, compute=1022,
-    // main=1022.
+    // ----- Return values: typed kinds per call_exit ------------------
+    // Exit order: classify=String "small", while_sum=6, for_sum=10,
+    // switch_label=String "small", early_return=999, compute=1022,
+    // main=1022.  String returns must surface as `ValueRecord::String`,
+    // not `Raw`.
     let returns: Vec<(String, &str)> = doc["events"]
         .as_array()
         .unwrap()
@@ -1289,16 +1328,36 @@ fn test_control_flow_test_via_ct_print_full() {
     assert_eq!(
         returns,
         vec![
-            ("classify".into(), "Raw"),
+            ("classify".into(), "String"),
             ("while_sum".into(), "Int"),
             ("for_sum".into(), "Int"),
-            ("switch_label".into(), "Raw"),
+            ("switch_label".into(), "String"),
             ("early_return".into(), "Int"),
             ("compute".into(), "Int"),
             ("main".into(), "Int"),
         ],
-        "return value kinds per call_exit (RECORDER BUG: String returns \
-         decode as Raw, not String)"
+        "return value kinds per call_exit (typed: String returns must \
+         decode as `ValueRecord::String`, not `Raw`)"
+    );
+
+    // Each String return must carry the correct text payload.
+    let string_returns: Vec<(String, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "call_exit" && e["return_value"]["kind"] == "String")
+        .map(|e| {
+            let f = e["function"].as_str().unwrap().to_string();
+            let text = e["return_value"]["text"].as_str().unwrap().to_string();
+            (f, text)
+        })
+        .collect();
+    assert_eq!(
+        string_returns,
+        vec![
+            ("classify".into(), "small".into()),
+            ("switch_label".into(), "small".into()),
+        ],
     );
 
     // The Int-typed returns must carry the right numeric values.
@@ -1313,11 +1372,6 @@ fn test_control_flow_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: Cadence String values decode as ValueRecord::Raw \
-            instead of ValueRecord::String, and Bool values decode as Raw \
-            instead of Bool.  When the typed-encoding work lands, \
-            sign_label / switch_result / flag should each surface as a \
-            properly typed ValueRecord variant."]
 fn test_control_flow_test_strings_decode_as_string() {
     let Some((doc, _)) = record_and_dump_full(
         "test_control_flow_test_strings_decode_as_string",
@@ -1448,22 +1502,32 @@ fn test_collections_test_via_ct_print_full() {
 
     // ----- Raw (RECORDER BUG) variables ------------------------------
     // RECORDER BUG: `xs` (array), `prices` (dictionary), `p` (struct),
-    // `d` (dictionary arg), `key` (String) all surface as Raw rather
-    // than their spec-compliant ValueRecord variants.
+    // `d` (dictionary arg) all surface as Raw rather than their
+    // spec-compliant `Sequence` / `HashMap` / `Struct` variants.  This
+    // is the wider Issue #40 cluster — separate fix from the typed
+    // String/Bool work which has already shipped (see `key` below).
     //
     // `xs` appears twice — once at let-binding site in compute, once
     // in array_sum's first dispatch step.
     assert_eq!(
-        observed_raw_var_sequence(&doc, &["xs", "prices", "p", "d", "key"]),
+        observed_raw_var_sequence(&doc, &["xs", "prices", "p", "d"]),
         vec![
             ("xs".into(), "[1, 2, 3, 4]".into()),
             ("xs".into(), "[1, 2, 3, 4]".into()),
             ("prices".into(), "{\"apple\": 30, \"banana\": 10}".into()),
             ("d".into(), "{\"apple\": 30, \"banana\": 10}".into()),
-            ("key".into(), "apple".into()),
             ("p".into(), "S.Point(x: 3, y: 4)".into()),
             ("p".into(), "S.Point(x: 3, y: 4)".into()),
         ],
+    );
+
+    // ----- Typed String variables ------------------------------------
+    // Cadence String dictionary keys decode as `ValueRecord::String`
+    // (not Raw) — see `test_control_flow_test_strings_decode_as_string`
+    // for the canonical pin.
+    assert_eq!(
+        observed_string_var_sequence(&doc, &["key"]),
+        vec![("key".into(), "apple".into())],
     );
 
     // ----- Returns ---------------------------------------------------
@@ -1770,23 +1834,19 @@ fn test_resource_capability_test_via_ct_print_full() {
         ],
     );
 
-    // ----- Resource-handle variables surface as Raw ------------------
+    // ----- Resource-handle lifecycle variables surface as `String` ---
     // The recorder names them `@resource:<Type>#<uuid>` and stages
-    // both create + destroy snapshots as Raw text payloads.
-    let raw_resource_vars = observed_raw_var_sequence(
-        &doc,
-        &[
-            "@resource:Coin#7001",
-            "@resource:Vault#7002",
-            "coin",
-        ],
-    );
+    // both create + destroy snapshots as typed `ValueRecord::String`
+    // text payloads.  (A future fix would lift these to a dedicated
+    // Resource variant — see the `#[ignore]`d sibling test below.)
     assert_eq!(
-        raw_resource_vars,
+        observed_string_var_sequence(
+            &doc,
+            &["@resource:Coin#7001", "@resource:Vault#7002"],
+        ),
         vec![
             ("@resource:Coin#7001".into(), "created(owner=0x01)".into()),
             ("@resource:Vault#7002".into(), "created(owner=0x01)".into()),
-            ("coin".into(), "@Coin#7001".into()),
             (
                 "@resource:Coin#7001".into(),
                 "destroyed(owner=0x01)".into(),
@@ -1796,6 +1856,14 @@ fn test_resource_capability_test_via_ct_print_full() {
                 "destroyed(owner=0x01)".into(),
             ),
         ],
+    );
+
+    // The `@Coin` move arg still surfaces as Raw because the recorder
+    // does not yet recognise the `@<Type>` discriminator (separate from
+    // the typed-leaf String/Bool work).  Pinning the present-day shape.
+    assert_eq!(
+        observed_raw_var_sequence(&doc, &["coin"]),
+        vec![("coin".into(), "@Coin#7001".into())],
     );
 
     // ----- Returns: deposit=Void, compute=42, main=42 ---------------
