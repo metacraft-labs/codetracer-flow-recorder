@@ -917,9 +917,11 @@ fn observed_int_var_sequence(
 }
 
 /// Decode (varname, raw-text) pairs for variables surfaced as
-/// `ValueRecord::Raw` (the present-day fallback for Cadence
-/// String/Array/Dict/Struct/Optional values — see the RECORDER BUG
-/// notes on the `#[ignore]`d sibling tests).
+/// `ValueRecord::Raw` (the residual fallback for Cadence values whose
+/// typed encoding has not yet shipped — e.g. Int128/Address scalars
+/// outside the i64-fits set, and any future compound forms beyond
+/// arrays / dicts / structs / optionals / `@Resource` handles).
+#[allow(dead_code)]
 fn observed_raw_var_sequence(
     doc: &serde_json::Value,
     raw_only: &[&str],
@@ -1482,42 +1484,145 @@ fn test_collections_test_via_ct_print_full() {
 
     // ----- Int variables ---------------------------------------------
     // total reappears across array_sum body + compute return-site;
-    // apple_price, dist_sq, doubled, some_val are all Ints.
+    // apple_price, dist_sq, doubled are all Ints.  `some_val` and the
+    // `o` argument carry Cadence type `Int?` and decode as
+    // `ValueRecord::Variant(Some(Int 7))` — see the dedicated check
+    // further down.
     let expected_ints: Vec<(String, i64)> = vec![
         ("total".into(), 0),
         ("total".into(), 10),
         ("apple_price".into(), 30),
         ("dist_sq".into(), 25),
-        ("some_val".into(), 7),
-        ("o".into(), 7),
         ("doubled".into(), 14),
     ];
     assert_eq!(
         observed_int_var_sequence(
             &doc,
-            &["total", "apple_price", "dist_sq", "some_val", "o", "doubled"],
+            &["total", "apple_price", "dist_sq", "doubled"],
         ),
         expected_ints
     );
 
-    // ----- Raw (RECORDER BUG) variables ------------------------------
-    // RECORDER BUG: `xs` (array), `prices` (dictionary), `p` (struct),
-    // `d` (dictionary arg) all surface as Raw rather than their
-    // spec-compliant `Sequence` / `HashMap` / `Struct` variants.  This
-    // is the wider Issue #40 cluster — separate fix from the typed
-    // String/Bool work which has already shipped (see `key` below).
-    //
-    // `xs` appears twice — once at let-binding site in compute, once
-    // in array_sum's first dispatch step.
+    // ----- Typed compound variables ---------------------------------
+    // After the typed-encoding fix for arrays / dicts / structs /
+    // optionals, `xs` (array), `prices` (dictionary), `p` (struct),
+    // and `d` (dictionary arg) surface as their spec-compliant
+    // `Sequence` / `Sequence-of-Tuples` / `Struct` variants — no
+    // longer the legacy stringified `Raw` payload.  Pin the kind
+    // sequence by varname so any future regression is caught here in
+    // addition to the dedicated `_value_kinds_present` test.
+    let compound_kinds: Vec<(String, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "xs" | "prices" | "p" | "d") {
+                return None;
+            }
+            let kind = v["value"]["kind"].as_str()?.to_string();
+            Some((name, kind))
+        })
+        .collect();
     assert_eq!(
-        observed_raw_var_sequence(&doc, &["xs", "prices", "p", "d"]),
+        compound_kinds,
         vec![
-            ("xs".into(), "[1, 2, 3, 4]".into()),
-            ("xs".into(), "[1, 2, 3, 4]".into()),
-            ("prices".into(), "{\"apple\": 30, \"banana\": 10}".into()),
-            ("d".into(), "{\"apple\": 30, \"banana\": 10}".into()),
-            ("p".into(), "S.Point(x: 3, y: 4)".into()),
-            ("p".into(), "S.Point(x: 3, y: 4)".into()),
+            ("xs".into(), "Sequence".into()),
+            ("xs".into(), "Sequence".into()),
+            ("prices".into(), "Sequence".into()),
+            ("d".into(), "Sequence".into()),
+            ("p".into(), "Struct".into()),
+            ("p".into(), "Struct".into()),
+        ],
+    );
+
+    // Spot-check the Sequence elements for `xs`: four typed Int leaves.
+    let xs_first = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "xs")
+        .expect("xs should be present");
+    let xs_elems = xs_first["value"]["elements"]
+        .as_array()
+        .expect("Sequence.elements array");
+    let xs_ints: Vec<i64> = xs_elems
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"), "xs element should be Int");
+            e["i"].as_i64().expect("Int.i must be i64")
+        })
+        .collect();
+    assert_eq!(xs_ints, vec![1, 2, 3, 4]);
+
+    // Spot-check `p` (Point struct): two typed Int field values.
+    let p_first = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "p")
+        .expect("p should be present");
+    let p_fields = p_first["value"]["field_values"]
+        .as_array()
+        .expect("Struct.field_values array");
+    let p_ints: Vec<i64> = p_fields
+        .iter()
+        .map(|e| {
+            assert_eq!(
+                e["kind"].as_str(),
+                Some("Int"),
+                "p field should be Int (numeric coercion)"
+            );
+            e["i"].as_i64().expect("Int.i must be i64")
+        })
+        .collect();
+    assert_eq!(p_ints, vec![3, 4]);
+
+    // ----- Optionals decode as `Variant(Some|None)` ------------------
+    // `some_val` (let-binding) and `o` (the `Int?` argument to
+    // `maybe_double`) both carry Cadence type `Int?` and surface as
+    // `ValueRecord::Variant { discriminator: "Some", contents: Int(7) }`.
+    let optional_vars: Vec<(String, String, i64)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "some_val" | "o") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Variant"),
+                "Cadence Int? must decode as `ValueRecord::Variant`; \
+                 got {} for {}",
+                v["value"],
+                name
+            );
+            let disc = v["value"]["discriminator"].as_str()?.to_string();
+            assert_eq!(
+                v["value"]["contents"]["kind"].as_str(),
+                Some("Int"),
+                "Variant.contents must be a typed Int leaf for {}",
+                name
+            );
+            let i = v["value"]["contents"]["i"].as_i64()?;
+            Some((name, disc, i))
+        })
+        .collect();
+    assert_eq!(
+        optional_vars,
+        vec![
+            ("some_val".into(), "Some".into(), 7),
+            ("o".into(), "Some".into(), 7),
         ],
     );
 
@@ -1547,12 +1652,6 @@ fn test_collections_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: Cadence Array/Dict/Struct/Optional values \
-            decode as ValueRecord::Raw (stringified) instead of \
-            Sequence/HashMap/Struct/Variant.  Spec-compliant output \
-            should expose `xs` as Sequence, `prices` as HashMap (or a \
-            dedicated Dict variant), `p` as Struct, and `some_val` as \
-            Variant(Some)."]
 fn test_collections_test_value_kinds_present() {
     let Some((doc, _)) = record_and_dump_full(
         "test_collections_test_value_kinds_present",
@@ -1585,17 +1684,25 @@ fn test_collections_test_value_kinds_present() {
 const ERROR_PATHS_NDJSON: &str = include_str!("ndjson/error_paths_test.ndjson");
 
 /// Records `error_paths_test.cdc` (NDJSON-driven) and asserts on the
-/// **exact** event shape.  Drives both the safe path through
-/// `divide_strict` (which has spec-compliant pre/post conditions but
-/// none are violated on this input) and a separate `panicking_call`
-/// invocation that emits an `EventLogKind::Error` IO event.
+/// **exact** event shape.  Drives the safe path through
+/// `divide_strict` (no pre/post violation), then exercises three
+/// failure modes back-to-back so the recorder can be pinned to emit
+/// distinct trace events for each:
 ///
-/// RECORDER BUG: pre-condition / post-condition violations are not
-/// surfaced as a distinct event kind — they would today look identical
-/// to a generic `panic` (i.e. an `ioError` IO event with the
-/// condition's failure message).  The `#[ignore]`d sibling test
-/// captures the spec-compliant expectation that pre/post failures
-/// receive a structured event.
+///  1. A `divide_strict(a:10, b:0)` call that triggers the
+///     `b != 0` pre-condition.
+///  2. A `divide_strict(a:7,  b:2)` call that triggers the
+///     `result * b == a` post-condition (integer truncation).
+///  3. A `panicking_call()` invocation that issues an explicit
+///     `panic("intentional panic for trace coverage")`.
+///
+/// All three flow through `EventLogKind` events; the pre/post failures
+/// route through `EventLogKind::TraceLogEvent` (-> `ioStderr`) with a
+/// `CadencePreCondition` / `CadencePostCondition` metadata tag, while
+/// the user `panic` keeps the historical `EventLogKind::Error`
+/// (-> `ioError`) channel.  The `#[ignore]`d sibling test asserts the
+/// looser `>=3` count guarantee; this strict test additionally pins
+/// the io_kind / text payload of every emitted event.
 #[test]
 fn test_error_paths_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -1628,22 +1735,26 @@ fn test_error_paths_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    assert_eq!(counts["steps"].as_u64(), Some(13), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    // 15 explicit `step` events in the NDJSON + 1 implicit start
+    // step emitted by `TraceWriter::start` = 16 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
-        Some(1),
-        "io_events; counts={counts} (the panic must surface as exactly one ioError)"
+        Some(3),
+        "io_events; counts={counts} (one event per failure mode: \
+         pre-condition + post-condition + panic)"
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 13 steps + 5 call_entry + 5 call_exit + 1 io = 24 events.
-    assert_eq!(events.len(), 24, "events.len()");
+    // 16 steps + 7 call_entry + 7 call_exit + 3 io = 33 events.
+    assert_eq!(events.len(), 33, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence ---------------------------------------------
     // First the safe chain: main → compute → safe_compute → divide_strict.
-    // Then the standalone panicking_call (depth 0, sibling to main).
+    // Then two more divide_strict invocations exercising pre / post
+    // violations, and finally the standalone panicking_call.
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
@@ -1651,10 +1762,13 @@ fn test_error_paths_test_via_ct_print_full() {
             "compute".to_string(),
             "safe_compute".to_string(),
             "divide_strict".to_string(),
+            "divide_strict".to_string(),
+            "divide_strict".to_string(),
             "panicking_call".to_string(),
         ],
     );
-    // LIFO inside the safe chain, then panicking_call exits last.
+    // LIFO inside the safe chain, then the failure-mode invocations
+    // exit in source order (each is depth-0 sibling to main).
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
@@ -1662,6 +1776,8 @@ fn test_error_paths_test_via_ct_print_full() {
             "safe_compute".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "divide_strict".to_string(),
+            "divide_strict".to_string(),
             "panicking_call".to_string(),
         ],
     );
@@ -1669,7 +1785,8 @@ fn test_error_paths_test_via_ct_print_full() {
     // ----- Variable values --------------------------------------------
     // safe_compute body: a=10, b=5.  divide_strict body re-binds the
     // same parameter names a=10, b=5.  Then q=2 surfaces in the
-    // post-call step in safe_compute.
+    // post-call step in safe_compute.  The two failure-mode invocations
+    // re-stage a=10/b=0 (pre-fail) and a=7/b=2 (post-fail).
     assert_eq!(
         observed_int_var_sequence(&doc, &["a", "b", "q"]),
         vec![
@@ -1678,42 +1795,72 @@ fn test_error_paths_test_via_ct_print_full() {
             ("a".into(), 10),
             ("b".into(), 5),
             ("q".into(), 2),
+            ("a".into(), 10),
+            ("b".into(), 0),
+            ("a".into(), 7),
+            ("b".into(), 2),
         ],
     );
 
     // ----- Returns: divide_strict=2, safe_compute=3, compute=3,
-    // main=3, panicking_call=Void --------------------------------------
+    // main=3, then divide_strict=Void (pre-fail), divide_strict=Void
+    // (post-fail), panicking_call=Void --------------------------------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(2), Some(3), Some(3), Some(3), None],
+        vec![
+            Some(2),
+            Some(3),
+            Some(3),
+            Some(3),
+            None,
+            None,
+            None,
+        ],
     );
 
-    // ----- IO event: panic message --------------------------------------
+    // ----- IO events: pre-condition, post-condition, panic ------------
+    // Three distinct entries.  Pre/post failures route through
+    // `EventLogKind::TraceLogEvent` (= `ioStderr`); the explicit panic
+    // keeps `EventLogKind::Error` (= `ioError`).  Order matches the
+    // emission order in the fixture.
     let io_events: Vec<&serde_json::Value> = events
         .iter()
         .filter(|e| e["kind"] == "io")
         .collect();
-    assert_eq!(io_events.len(), 1, "exactly one io event");
-    let panic_io = io_events[0];
     assert_eq!(
-        panic_io["io_kind"].as_str(),
-        Some("ioError"),
-        "panic must surface as ioError; got {panic_io}"
+        io_events.len(),
+        3,
+        "exactly three io events (pre, post, panic)"
     );
+
+    let io_summary: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            let kind = e["io_kind"].as_str().unwrap_or("?");
+            let text = e["text"].as_str().unwrap_or("?");
+            (kind, text)
+        })
+        .collect();
     assert_eq!(
-        panic_io["text"].as_str(),
-        Some("intentional panic for trace coverage"),
+        io_summary,
+        vec![
+            (
+                "ioStderr",
+                "pre-condition failed: denominator must be non-zero",
+            ),
+            (
+                "ioStderr",
+                "post-condition failed: division must be exact",
+            ),
+            ("ioError", "intentional panic for trace coverage"),
+        ],
+        "Pre/post-condition failures must route through `TraceLogEvent` \
+         (ioStderr) with a distinct text payload; the user-issued panic \
+         keeps the historical `Error` (ioError) channel."
     );
 }
 
 #[test]
-#[ignore = "RECORDER BUG: pre-condition and post-condition violations \
-            in Cadence are not distinguishable from a generic `panic` \
-            in the trace today — they all map to a single `ioError` \
-            IO event.  Spec-compliant output should distinguish \
-            EventLogKind::Error (pre/post failure) from a regular \
-            user-issued panic, and ideally include the failing \
-            condition's source location."]
 fn test_error_paths_test_distinguishes_pre_post_from_panic() {
     let Some((doc, _)) = record_and_dump_full(
         "test_error_paths_test_distinguishes_pre_post_from_panic",
@@ -1858,13 +2005,35 @@ fn test_resource_capability_test_via_ct_print_full() {
         ],
     );
 
-    // The `@Coin` move arg still surfaces as Raw because the recorder
-    // does not yet recognise the `@<Type>` discriminator (separate from
-    // the typed-leaf String/Bool work).  Pinning the present-day shape.
+    // The `@Coin` move arg now decodes as a typed
+    // `ValueRecord::Struct { field_values: [String "Coin", Int 7001] }`
+    // (the resource type name + uuid), not the legacy stringified Raw.
+    // Pinning every layer of the typed shape so any regression to Raw
+    // is caught here in addition to the dedicated
+    // `_resource_kind_is_typed` test.
+    let coin_var = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "coin")
+        .expect("coin should be present");
     assert_eq!(
-        observed_raw_var_sequence(&doc, &["coin"]),
-        vec![("coin".into(), "@Coin#7001".into())],
+        coin_var["value"]["kind"].as_str(),
+        Some("Struct"),
+        "@Coin resource handle must decode as `ValueRecord::Struct`; \
+         got {}",
+        coin_var["value"]
     );
+    let coin_fields = coin_var["value"]["field_values"]
+        .as_array()
+        .expect("Struct.field_values array");
+    assert_eq!(coin_fields.len(), 2, "expected (type, uuid) field pair");
+    assert_eq!(coin_fields[0]["kind"].as_str(), Some("String"));
+    assert_eq!(coin_fields[0]["text"].as_str(), Some("Coin"));
+    assert_eq!(coin_fields[1]["kind"].as_str(), Some("Int"));
+    assert_eq!(coin_fields[1]["i"].as_i64(), Some(7001));
 
     // ----- Returns: deposit=Void, compute=42, main=42 ---------------
     assert_eq!(
@@ -1874,12 +2043,6 @@ fn test_resource_capability_test_via_ct_print_full() {
 }
 
 #[test]
-#[ignore = "RECORDER BUG: Cadence resource references (e.g. `@Coin#7001`) \
-            should decode as a dedicated typed ValueRecord variant \
-            carrying the resource's UUID, owner, and type, not as a \
-            stringified Raw payload.  Spec-compliant output should \
-            also expose capability bindings as a distinct value \
-            kind."]
 fn test_resource_capability_test_resource_kind_is_typed() {
     let Some((doc, _)) = record_and_dump_full(
         "test_resource_capability_test_resource_kind_is_typed",
