@@ -278,6 +278,92 @@ fn top_level_index_of(s: &str, sep: char) -> Option<usize> {
     None
 }
 
+/// Encode the decimal-formatted integer in `value` as a typed
+/// [`ValueRecord::BigInt`] using the writer's `writeBigInt` shape:
+/// `negative` flag plus big-endian unsigned magnitude bytes.
+///
+/// Used by the `Int128` / `UInt128` / `UInt256` / `Word*` numeric
+/// branches in `value_record` so wide integers preserve their exact
+/// value end-to-end.  Falls back to a single zero byte when the input
+/// is not a valid base-10 integer (the recorder treats that as the
+/// big-int analogue of a parse failure).
+fn value_to_bigint(value: &str, type_id: TypeId) -> ValueRecord {
+    let v = value.trim();
+    let (negative, magnitude_str) = match v.strip_prefix('-') {
+        Some(rest) => (true, rest),
+        None => (false, v),
+    };
+    let bytes = decimal_to_be_bytes(magnitude_str);
+    ValueRecord::BigInt {
+        b: bytes,
+        negative,
+        type_id,
+    }
+}
+
+/// Convert a base-10 unsigned-magnitude string into big-endian bytes.
+///
+/// Standalone (no `num-bigint` dep) so the recorder stays at zero
+/// extra deps.  Performs schoolbook divide-by-256 over a
+/// little-endian digit buffer, which is O(n^2) in the digit count but
+/// fine for the ≤256-bit numerics Cadence accepts.  An empty / non-
+/// digit input returns the canonical empty-byte representation
+/// (which the writer encodes as the literal 0).
+fn decimal_to_be_bytes(decimal: &str) -> Vec<u8> {
+    let digits: Vec<u8> = decimal
+        .chars()
+        .filter_map(|c| c.to_digit(10).map(|d| d as u8))
+        .collect();
+    if digits.is_empty() {
+        return Vec::new();
+    }
+    // Strip leading zeros.
+    let mut idx = 0usize;
+    while idx + 1 < digits.len() && digits[idx] == 0 {
+        idx += 1;
+    }
+    let mut digits: Vec<u8> = digits[idx..].to_vec();
+    if digits == [0u8] {
+        return vec![0u8];
+    }
+    let mut be: Vec<u8> = Vec::new();
+    while !(digits.len() == 1 && digits[0] == 0) {
+        let mut remainder: u32 = 0;
+        for d in digits.iter_mut() {
+            let acc = remainder * 10 + *d as u32;
+            *d = (acc / 256) as u8;
+            remainder = acc % 256;
+        }
+        be.push(remainder as u8);
+        // Strip leading zero in the new digit buffer.
+        while digits.len() > 1 && digits[0] == 0 {
+            digits.remove(0);
+        }
+    }
+    be.reverse();
+    be
+}
+
+/// Compute a stable 63-bit hash of a value's printed form, used as
+/// the `address` field on `ValueRecord::Reference` so capabilities
+/// published at the same storage path (or references borrowed at the
+/// same site) compare equal across the trace.
+///
+/// Uses FNV-1a mixing for low-collision determinism (no seeding).
+/// The result is masked to the low 63 bits because the downstream
+/// `ct-print` converts the writer's `uint64` address into `int64`
+/// for the JSON dump and raises `RangeDefect` when the high bit is
+/// set — Reference values would otherwise crash the decoder.
+fn stable_address_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
+    for byte in s.as_bytes() {
+        h ^= *byte as u64;
+        h = h.wrapping_mul(0x100000001b3); // FNV prime
+    }
+    // Mask to i64::MAX so `int64(address)` in ct-print never overflows.
+    h & 0x7fffffffffffffff
+}
+
 /// Strip a single leading + trailing pair of `"` (Cadence prints
 /// dictionary keys as JSON strings).
 fn strip_quotes(s: &str) -> &str {
@@ -820,6 +906,141 @@ impl CadenceTracer {
                     elements,
                     is_slice: false,
                     type_id: dict_id,
+                }
+            }
+
+            // -------- Cadence Path values ------------------------------
+            // `Path` (and the more specific `StoragePath` /
+            // `PublicPath` / `PrivatePath`) values render in Cadence as
+            // `/<domain>/<identifier>` — e.g. `/storage/Vault`.
+            // Surface as a typed `Struct { String "domain", String
+            // "identifier" }` (the canonical Cadence Path shape) so
+            // downstream consumers can resolve the domain and
+            // identifier without re-parsing the slash form.
+            Some(t)
+                if matches!(
+                    t,
+                    "Path" | "StoragePath" | "PublicPath" | "PrivatePath" | "CapabilityPath"
+                ) =>
+            {
+                let struct_id = self.ensure_type(TypeKind::Struct, t);
+                let domain_id = self.ensure_type(TypeKind::String, "PathDomain");
+                let ident_id = self.ensure_type(TypeKind::String, "PathIdentifier");
+                let v = value.trim();
+                let stripped = v.strip_prefix('/').unwrap_or(v);
+                let (domain, identifier) = match stripped.split_once('/') {
+                    Some((d, i)) => (d.to_string(), i.to_string()),
+                    None => (stripped.to_string(), String::new()),
+                };
+                ValueRecord::Struct {
+                    field_values: vec![
+                        ValueRecord::String {
+                            text: domain,
+                            type_id: domain_id,
+                        },
+                        ValueRecord::String {
+                            text: identifier,
+                            type_id: ident_id,
+                        },
+                    ],
+                    type_id: struct_id,
+                }
+            }
+
+            // -------- Cadence Address literals -------------------------
+            // `Address` values are 8-byte unsigned integers shown in
+            // hex form (e.g. `0x01`, `0xf8d6e0586b0a20c7`).  When the
+            // value fits in `i64` (signed) we surface it as
+            // `ValueRecord::Int` (matching the M2 hex-form convention);
+            // otherwise we encode it as a `ValueRecord::BigInt` with
+            // the 8 raw big-endian bytes preserved.  Closes the M9
+            // known limitation that `Address` fell back to `Raw`.
+            Some("Address") => {
+                let type_id = self.ensure_type(TypeKind::Int, "Address");
+                let v = value.trim();
+                let hex = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")).unwrap_or(v);
+                if let Ok(u) = u64::from_str_radix(hex, 16) {
+                    if u <= i64::MAX as u64 {
+                        ValueRecord::Int {
+                            i: u as i64,
+                            type_id,
+                        }
+                    } else {
+                        // 8-byte big-endian unsigned magnitude.
+                        ValueRecord::BigInt {
+                            b: u.to_be_bytes().to_vec(),
+                            negative: false,
+                            type_id,
+                        }
+                    }
+                } else {
+                    ValueRecord::Raw {
+                        r: value.to_string(),
+                        type_id,
+                    }
+                }
+            }
+
+            // -------- Wide integers: > 64-bit ---------------------------
+            // Cadence supports integer types up to 256 bits.  Widths
+            // that do not fit in `i64` (signed) MUST surface as a typed
+            // `ValueRecord::BigInt` so the exact value is preserved
+            // across the trace (the new `writeBigInt` encoder from
+            // workspace commit `25435ac` is the closing dependency).
+            // Closes the M9 known limitation that `Int128` / `UInt128`
+            // / `UInt256` fell back to `ValueRecord::Raw`.
+            Some(t)
+                if matches!(
+                    t,
+                    "Int128"
+                        | "Int256"
+                        | "UInt128"
+                        | "UInt256"
+                        | "Word128"
+                        | "Word256"
+                ) =>
+            {
+                let type_id = self.ensure_type(TypeKind::Int, t);
+                value_to_bigint(value, type_id)
+            }
+
+            // -------- Capability and Reference types -------------------
+            // Cadence references (`&Vault`, `&{Provider}`,
+            // `auth(Withdraw) &Vault`) and capabilities
+            // (`Capability<&Vault>`) are pointer-like values backed by
+            // an underlying stored resource.  Surface them as
+            // `ValueRecord::Reference { dereferenced, address, mutable,
+            // type_id }` so the typed shape from the new
+            // `beginReference` encoder (workspace commit `25435ac`) is
+            // preserved end-to-end.
+            //
+            //   * `address` carries a stable hash of the value's
+            //     printed form so capabilities published at the same
+            //     storage path compare equal across the trace.
+            //   * `mutable` is `true` for entitlement-authorized
+            //     references (`auth(...) &T`), `false` otherwise.
+            //   * `dereferenced` is a typed `String` payload with the
+            //     printed form of the borrowed value (e.g.
+            //     `/storage/Vault`).  A future enhancement could route
+            //     this through a per-resource snapshot.
+            Some(t)
+                if t.starts_with('&')
+                    || t.starts_with("auth(")
+                    || t.starts_with("Capability<")
+                    || t == "Capability" =>
+            {
+                let ref_type_id = self.ensure_type(TypeKind::Ref, t);
+                let inner_type_id = self.ensure_type(TypeKind::String, "ReferencePayload");
+                let mutable = t.starts_with("auth(");
+                let address = stable_address_hash(value);
+                ValueRecord::Reference {
+                    dereferenced: Box::new(ValueRecord::String {
+                        text: value.to_string(),
+                        type_id: inner_type_id,
+                    }),
+                    address,
+                    mutable,
+                    type_id: ref_type_id,
                 }
             }
 

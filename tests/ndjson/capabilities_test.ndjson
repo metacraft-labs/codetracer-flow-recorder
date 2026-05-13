@@ -1,0 +1,16 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"capabilities_test.cdc","line":55}
+{"type":"call","name":"compute"}
+{"type":"step","file":"capabilities_test.cdc","line":36}
+{"type":"variable","name":"cap","value":"Capability<&Vault>(/storage/Vault)","cadence_type":"Capability<&Vault>"}
+{"type":"step","file":"capabilities_test.cdc","line":40}
+{"type":"event","name":"CapabilityPublish","payload":"/public/Vault"}
+{"type":"step","file":"capabilities_test.cdc","line":43}
+{"type":"variable","name":"ref","value":"&Vault(/storage/Vault)","cadence_type":"&Vault"}
+{"type":"step","file":"capabilities_test.cdc","line":46}
+{"type":"variable","name":"bal","value":"0","cadence_type":"Int"}
+{"type":"step","file":"capabilities_test.cdc","line":49}
+{"type":"event","name":"CapabilityUnpublish","payload":"/public/Vault"}
+{"type":"step","file":"capabilities_test.cdc","line":51}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"return","value":"0","cadence_type":"Int"}

@@ -1,0 +1,16 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"address_literals_test.cdc","line":24}
+{"type":"call","name":"compute"}
+{"type":"step","file":"address_literals_test.cdc","line":14}
+{"type":"variable","name":"a","value":"0x01","cadence_type":"Address"}
+{"type":"step","file":"address_literals_test.cdc","line":17}
+{"type":"variable","name":"a_alt","value":"0x01","cadence_type":"Address"}
+{"type":"step","file":"address_literals_test.cdc","line":20}
+{"type":"variable","name":"b","value":"0xf8d6e0586b0a20c7","cadence_type":"Address"}
+{"type":"step","file":"address_literals_test.cdc","line":23}
+{"type":"variable","name":"eq_small","value":"true","cadence_type":"Bool"}
+{"type":"step","file":"address_literals_test.cdc","line":24}
+{"type":"variable","name":"eq_mixed","value":"false","cadence_type":"Bool"}
+{"type":"step","file":"address_literals_test.cdc","line":26}
+{"type":"return","value":"true","cadence_type":"Bool"}
+{"type":"return","value":"true","cadence_type":"Bool"}

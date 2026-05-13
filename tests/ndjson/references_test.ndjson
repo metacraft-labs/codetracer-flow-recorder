@@ -1,0 +1,31 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"references_test.cdc","line":72}
+{"type":"call","name":"compute"}
+{"type":"step","file":"references_test.cdc","line":56}
+{"type":"resource_create","resource_type":"Vault","uuid":9001,"owner":"0x01","file":"references_test.cdc","line":56}
+{"type":"step","file":"references_test.cdc","line":58}
+{"type":"variable","name":"plain","value":"&Vault#9001","cadence_type":"&Vault"}
+{"type":"step","file":"references_test.cdc","line":59}
+{"type":"call","name":"read_plain","args":[{"name":"r","value":"&Vault#9001","cadence_type":"&Vault"}]}
+{"type":"step","file":"references_test.cdc","line":47}
+{"type":"return","value":"100","cadence_type":"Int"}
+{"type":"variable","name":"p","value":"100","cadence_type":"Int"}
+{"type":"step","file":"references_test.cdc","line":61}
+{"type":"variable","name":"restricted","value":"&{Provider}#9001","cadence_type":"&{Provider}"}
+{"type":"step","file":"references_test.cdc","line":62}
+{"type":"call","name":"read_restricted","args":[{"name":"r","value":"&{Provider}#9001","cadence_type":"&{Provider}"}]}
+{"type":"step","file":"references_test.cdc","line":51}
+{"type":"return","value":"100","cadence_type":"Int"}
+{"type":"variable","name":"r","value":"100","cadence_type":"Int"}
+{"type":"step","file":"references_test.cdc","line":64}
+{"type":"variable","name":"entitled","value":"auth(Withdraw)&Vault#9001","cadence_type":"auth(Withdraw) &Vault"}
+{"type":"step","file":"references_test.cdc","line":65}
+{"type":"call","name":"apply_withdraw","args":[{"name":"r","value":"auth(Withdraw)&Vault#9001","cadence_type":"auth(Withdraw) &Vault"},{"name":"amount","value":"25","cadence_type":"Int"}]}
+{"type":"step","file":"references_test.cdc","line":54}
+{"type":"return","value":"25","cadence_type":"Int"}
+{"type":"variable","name":"w","value":"25","cadence_type":"Int"}
+{"type":"step","file":"references_test.cdc","line":67}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9001,"owner":"0x01","file":"references_test.cdc","line":67}
+{"type":"step","file":"references_test.cdc","line":68}
+{"type":"return","value":"225","cadence_type":"Int"}
+{"type":"return","value":"225","cadence_type":"Int"}
