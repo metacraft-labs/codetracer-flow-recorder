@@ -20,7 +20,16 @@
 {"type":"return","value":"3","cadence_type":"Int"}
 {"type":"step","file":"error_paths_test.cdc","line":32}
 {"type":"return","value":"3","cadence_type":"Int"}
+{"type":"call","name":"divide_strict","args":[{"name":"a","value":"10","cadence_type":"Int"},{"name":"b","value":"0","cadence_type":"Int"}]}
+{"type":"step","file":"error_paths_test.cdc","line":3}
+{"type":"error","message":"pre-condition failed: denominator must be non-zero","error_kind":"pre"}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"call","name":"divide_strict","args":[{"name":"a","value":"7","cadence_type":"Int"},{"name":"b","value":"2","cadence_type":"Int"}]}
+{"type":"step","file":"error_paths_test.cdc","line":6}
+{"type":"step","file":"error_paths_test.cdc","line":9}
+{"type":"error","message":"post-condition failed: division must be exact","error_kind":"post"}
+{"type":"return","value":"","cadence_type":"Void"}
 {"type":"call","name":"panicking_call"}
 {"type":"step","file":"error_paths_test.cdc","line":13}
-{"type":"error","message":"intentional panic for trace coverage"}
+{"type":"error","message":"intentional panic for trace coverage","error_kind":"panic"}
 {"type":"return","value":"","cadence_type":"Void"}

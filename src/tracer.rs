@@ -13,7 +13,8 @@ use std::path::Path;
 use std::process::Command;
 
 use codetracer_trace_types::{
-    EventLogKind, FullValueRecord, Line, TraceLowLevelEvent, TypeKind, ValueRecord, NONE_VALUE,
+    EventLogKind, FullValueRecord, Line, TraceLowLevelEvent, TypeId, TypeKind, ValueRecord,
+    NONE_VALUE,
 };
 use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
@@ -54,7 +55,22 @@ pub enum TraceEvent {
         cadence_type: Option<String>,
     },
     #[serde(rename = "error")]
-    Error { message: String },
+    Error {
+        message: String,
+        /// Optional sub-kind discriminator emitted by the Go helper to
+        /// distinguish Cadence pre-condition / post-condition violations
+        /// from a user-issued `panic`.  Recognised values are
+        /// `"pre"`, `"post"`, `"panic"`; any other (or absent) value is
+        /// treated as the legacy generic Error.
+        ///
+        /// Spec rationale: the strict pin
+        /// `test_error_paths_test_distinguishes_pre_post_from_panic`
+        /// requires three distinct trace events for the three
+        /// failure modes — historically all three collapsed onto a
+        /// single `EventLogKind::Error` IO entry.
+        #[serde(default, rename = "error_kind")]
+        error_kind: Option<String>,
+    },
     #[serde(rename = "event")]
     Event { name: String, payload: String },
 
@@ -122,6 +138,155 @@ pub fn parse_ndjson(text: &str) -> Result<Vec<TraceEvent>> {
         events.push(event);
     }
     Ok(events)
+}
+
+// ---------------------------------------------------------------------------
+// Cadence printed-form parsers (used by `value_record`)
+// ---------------------------------------------------------------------------
+
+/// Split a Cadence-printed array (`"[1, 2, 3, 4]"`) into its element
+/// strings, respecting nested brackets/braces and double-quoted strings
+/// so a nested compound element is not split mid-payload.
+///
+/// Returns an empty `Vec` for `"[]"` or any input that does not start
+/// with `[`.
+fn parse_cadence_array(value: &str) -> Vec<String> {
+    let v = value.trim();
+    if !(v.starts_with('[') && v.ends_with(']')) {
+        return Vec::new();
+    }
+    let inner = &v[1..v.len() - 1];
+    split_top_level(inner, ',')
+}
+
+/// Split a Cadence-printed dictionary (`"{\"apple\": 30, \"banana\": 10}"`)
+/// into `(key, value)` string pairs.  Quoted string keys have the
+/// surrounding `"` stripped so the caller can feed the key straight back
+/// through `value_record` with the dictionary's key type.
+///
+/// Returns an empty `Vec` for `"{}"` or any input that does not start
+/// with `{`.
+fn parse_cadence_dict(value: &str) -> Vec<(String, String)> {
+    let v = value.trim();
+    if !(v.starts_with('{') && v.ends_with('}')) {
+        return Vec::new();
+    }
+    let inner = &v[1..v.len() - 1];
+    split_top_level(inner, ',')
+        .into_iter()
+        .filter_map(|entry| {
+            // Find the top-level `:` that separates key from value.
+            let split_idx = top_level_index_of(&entry, ':')?;
+            let key = entry[..split_idx].trim().to_string();
+            let val = entry[split_idx + 1..].trim().to_string();
+            let key = strip_quotes(&key).to_string();
+            Some((key, val))
+        })
+        .collect()
+}
+
+/// Parse a Cadence-printed struct (`"S.Point(x: 3, y: 4)"`) into an
+/// ordered vector of `(field_name, field_value)` pairs.  Returns an
+/// empty `Vec` if the input does not match the `Name(field: val, ...)`
+/// shape.
+fn parse_cadence_struct(value: &str) -> Vec<(String, String)> {
+    let v = value.trim();
+    let open = match v.find('(') {
+        Some(i) => i,
+        None => return Vec::new(),
+    };
+    if !v.ends_with(')') {
+        return Vec::new();
+    }
+    let inner = &v[open + 1..v.len() - 1];
+    split_top_level(inner, ',')
+        .into_iter()
+        .filter_map(|field| {
+            let split_idx = top_level_index_of(&field, ':')?;
+            let name = field[..split_idx].trim().to_string();
+            let val = field[split_idx + 1..].trim().to_string();
+            Some((name, val))
+        })
+        .collect()
+}
+
+/// Parse a Cadence resource handle (`"@Coin#7001"`) into its `(type,
+/// uuid)` components.  Returns `None` if the input does not match the
+/// `@<Type>#<uuid>` shape.
+fn parse_resource_handle(value: &str) -> Option<(String, u64)> {
+    let v = value.trim();
+    let v = v.strip_prefix('@')?;
+    let (ty, rest) = v.split_once('#')?;
+    let uuid: u64 = rest.parse().ok()?;
+    Some((ty.to_string(), uuid))
+}
+
+/// Split `s` on every top-level occurrence of `sep`, treating `[]`,
+/// `{}`, `()` and double-quoted substrings as opaque blocks.  Used to
+/// safely walk over Cadence printed compound forms without serde-style
+/// re-parsing of every layer.
+fn split_top_level(s: &str, sep: char) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut depth: i32 = 0;
+    let mut in_quote = false;
+    let mut start = 0;
+    for (i, ch) in s.char_indices() {
+        if in_quote {
+            if ch == '"' {
+                in_quote = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_quote = true,
+            '[' | '{' | '(' => depth += 1,
+            ']' | '}' | ')' => depth -= 1,
+            c if c == sep && depth == 0 => {
+                out.push(s[start..i].trim().to_string());
+                start = i + ch.len_utf8();
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim().to_string();
+    if !last.is_empty() || !out.is_empty() {
+        out.push(last);
+    }
+    out
+}
+
+/// Find the byte index of the first top-level occurrence of `sep` in
+/// `s`, treating brackets/braces/parens/quotes as opaque.
+fn top_level_index_of(s: &str, sep: char) -> Option<usize> {
+    let mut depth: i32 = 0;
+    let mut in_quote = false;
+    for (i, ch) in s.char_indices() {
+        if in_quote {
+            if ch == '"' {
+                in_quote = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => in_quote = true,
+            '[' | '{' | '(' => depth += 1,
+            ']' | '}' | ')' => depth -= 1,
+            c if c == sep && depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Strip a single leading + trailing pair of `"` (Cadence prints
+/// dictionary keys as JSON strings).
+fn strip_quotes(s: &str) -> &str {
+    let s = s.trim();
+    if s.len() >= 2 && s.starts_with('"') && s.ends_with('"') {
+        &s[1..s.len() - 1]
+    } else {
+        s
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -398,11 +563,34 @@ impl CadenceTracer {
                         }
                     }
                 }
-                TraceEvent::Error { message } => {
+                TraceEvent::Error { message, error_kind } => {
+                    // Distinguish Cadence pre-condition / post-condition
+                    // violations from a user-issued `panic`.  Pre/post
+                    // failures route through `EventLogKind::TraceLogEvent`
+                    // (which becomes `ioStderr` in the multi-stream
+                    // container) with a dedicated `CadencePreCondition` /
+                    // `CadencePostCondition` metadata tag, so consumers
+                    // can grep them apart from a generic runtime error;
+                    // the metadata also pins the failure mode in the
+                    // event log itself, surviving the lossy `io_kind`
+                    // bucketing.
+                    let (log_kind, metadata) = match error_kind.as_deref() {
+                        Some("pre") => (
+                            EventLogKind::TraceLogEvent,
+                            "CadencePreCondition",
+                        ),
+                        Some("post") => (
+                            EventLogKind::TraceLogEvent,
+                            "CadencePostCondition",
+                        ),
+                        Some("panic") | None | Some(_) => {
+                            (EventLogKind::Error, "CadenceRuntimeError")
+                        }
+                    };
                     TraceWriter::register_special_event(
                         &mut *self.writer,
-                        EventLogKind::Error,
-                        "CadenceRuntimeError",
+                        log_kind,
+                        metadata,
                         message,
                     );
                 }
@@ -524,40 +712,209 @@ impl CadenceTracer {
         type_id
     }
 
+    /// Lazily register a Cadence type and return its `TypeId`.
+    ///
+    /// The Nim writer interns by `(kind, lang_type)`, so re-issuing the
+    /// same call is cheap; we still memoise on the Rust side so the
+    /// `value_record` recursion does not pay an FFI hop per element.
+    fn ensure_type(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
+        if let Some(&id) = self.type_ids.get(lang_type) {
+            return id;
+        }
+        let id = TraceWriter::ensure_type_id(&mut *self.writer, kind, lang_type);
+        self.type_ids.insert(lang_type.to_string(), id);
+        id
+    }
+
     /// Decode a NDJSON `value` string into a typed `ValueRecord`, using
     /// the helper-side `cadence_type` discriminator when present.
     ///
     /// Spec: every typed leaf MUST surface as its dedicated
     /// `ValueRecord` variant — `Bool` as `Bool { b }`, `String` as
-    /// `String { text }`, integer types as `Int { i }`.  Falling back to
-    /// `Raw` (or to `String` for Bools) violates
+    /// `String { text }`, integer types as `Int { i }`,
+    /// arrays as `Sequence { elements }`, dictionaries as a
+    /// `Sequence` of `Tuple` key/value pairs, structs / resources as
+    /// `Struct { field_values }`, and optionals as `Variant { Some|None }`.
+    /// Falling back to `Raw` violates
     /// `metacraft-specs/policies/recorder-test-requirements.md` §1.
     /// Only genuinely unrecognised types fall through to a stringified
     /// `Raw` representation — and even those should be tightened up as
     /// the recorder learns more Cadence types.
-    fn value_record(&self, value: &str, cadence_type: Option<&str>) -> ValueRecord {
-        let type_name = cadence_type.unwrap_or("Int");
-        let type_id = self
-            .type_ids
-            .get(type_name)
-            .copied()
-            .unwrap_or_else(|| self.type_ids.get("Int").copied().unwrap());
+    fn value_record(&mut self, value: &str, cadence_type: Option<&str>) -> ValueRecord {
+        let trimmed_type = cadence_type.map(|t| t.trim());
+        match trimmed_type {
+            // -------- Optionals: `T?` ----------------------------------
+            Some(t) if t.ends_with('?') && t.len() > 1 => {
+                let inner_type = &t[..t.len() - 1];
+                let variant_id = self.ensure_type(TypeKind::Variant, t);
+                let v = value.trim();
+                if v.is_empty() || v == "nil" || v == "Optional()" {
+                    // Cadence absent optional.  Carry an inner `None`
+                    // payload so consumers walking `contents` see a
+                    // typed `ValueRecord::None` rather than an empty
+                    // box.
+                    let inner_id = self.ensure_type(TypeKind::None, inner_type);
+                    ValueRecord::Variant {
+                        discriminator: "None".to_string(),
+                        contents: Box::new(ValueRecord::None { type_id: inner_id }),
+                        type_id: variant_id,
+                    }
+                } else {
+                    let inner = self.value_record(v, Some(inner_type));
+                    ValueRecord::Variant {
+                        discriminator: "Some".to_string(),
+                        contents: Box::new(inner),
+                        type_id: variant_id,
+                    }
+                }
+            }
 
-        match cadence_type {
+            // -------- Arrays: `[T]` ------------------------------------
+            Some(t)
+                if t.starts_with('[')
+                    && t.ends_with(']')
+                    && t.len() >= 2 =>
+            {
+                let inner_type = &t[1..t.len() - 1];
+                let seq_id = self.ensure_type(TypeKind::Seq, t);
+                let elements = parse_cadence_array(value)
+                    .into_iter()
+                    .map(|elem| self.value_record(&elem, Some(inner_type)))
+                    .collect();
+                ValueRecord::Sequence {
+                    elements,
+                    is_slice: false,
+                    type_id: seq_id,
+                }
+            }
+
+            // -------- Dictionaries: `{K: V}` ---------------------------
+            Some(t)
+                if t.starts_with('{')
+                    && t.ends_with('}')
+                    && t.contains(':') =>
+            {
+                // Strip the outer braces, then split on the first ':'
+                // to recover (key_type, value_type).  Cadence dict
+                // values render as JSON-ish objects: `{"apple": 30}`.
+                let inner = &t[1..t.len() - 1];
+                let (key_type, val_type) = match inner.split_once(':') {
+                    Some((k, v)) => (k.trim(), v.trim()),
+                    None => ("String", "Int"),
+                };
+                let dict_id = self.ensure_type(TypeKind::Seq, t);
+                let pair_id = self.ensure_type(TypeKind::Tuple, "DictEntry");
+                let pairs = parse_cadence_dict(value);
+                let elements = pairs
+                    .into_iter()
+                    .map(|(k, v)| {
+                        let key_value = self.value_record(&k, Some(key_type));
+                        let val_value = self.value_record(&v, Some(val_type));
+                        ValueRecord::Tuple {
+                            elements: vec![key_value, val_value],
+                            type_id: pair_id,
+                        }
+                    })
+                    .collect();
+                ValueRecord::Sequence {
+                    elements,
+                    is_slice: false,
+                    type_id: dict_id,
+                }
+            }
+
+            // -------- Resource references: `@Type` ---------------------
+            // The Cadence printed form is `@<Type>#<uuid>` (e.g.
+            // `@Coin#7001`).  Surface this as a typed `Struct` carrying
+            // the resource's identifying fields so downstream consumers
+            // can query lineage by uuid/owner without re-parsing the
+            // printed form.  Spec: `metacraft-specs/policies/
+            // recorder-test-requirements.md` §1 (typed payload).
+            Some(t) if t.starts_with('@') => {
+                let resource_name = &t[1..];
+                let struct_id = self.ensure_type(TypeKind::Struct, t);
+                let type_field_id = self.ensure_type(TypeKind::String, "ResourceType");
+                let uuid_field_id = self.ensure_type(TypeKind::Int, "ResourceUuid");
+                let (parsed_type, parsed_uuid) =
+                    parse_resource_handle(value).unwrap_or_else(|| {
+                        (resource_name.to_string(), 0)
+                    });
+                ValueRecord::Struct {
+                    field_values: vec![
+                        ValueRecord::String {
+                            text: parsed_type,
+                            type_id: type_field_id,
+                        },
+                        ValueRecord::Int {
+                            i: parsed_uuid as i64,
+                            type_id: uuid_field_id,
+                        },
+                    ],
+                    type_id: struct_id,
+                }
+            }
+
+            // -------- Structs: `S.Point` (and other named struct types) -
+            // Cadence prints structs as `Name(field: val, ...)`.  We
+            // recognise the discriminator via the printed form rather
+            // than the type name (no leading `[`, `{`, `@`, no `?`,
+            // contains `(...)` and a `:` separator).
+            Some(t)
+                if value.contains('(')
+                    && value.contains(')')
+                    && value.contains(':')
+                    && !t.starts_with('[')
+                    && !t.starts_with('{')
+                    && !t.starts_with('@')
+                    && !t.ends_with('?') =>
+            {
+                let struct_id = self.ensure_type(TypeKind::Struct, t);
+                let fields = parse_cadence_struct(value);
+                let field_values = fields
+                    .into_iter()
+                    .map(|(_field_name, field_value)| {
+                        // Field cadence_type is unknown without a schema
+                        // — best-effort numeric parse, fall back to
+                        // String so the value is still typed.
+                        if let Ok(i) = field_value.parse::<i64>() {
+                            ValueRecord::Int {
+                                i,
+                                type_id: self.ensure_type(TypeKind::Int, "Int"),
+                            }
+                        } else {
+                            ValueRecord::String {
+                                text: field_value,
+                                type_id: self.ensure_type(TypeKind::String, "String"),
+                            }
+                        }
+                    })
+                    .collect();
+                ValueRecord::Struct {
+                    field_values,
+                    type_id: struct_id,
+                }
+            }
+
             // Cadence Bools come as the literal strings "true" / "false".
-            Some("Bool") => match value {
-                "true" => ValueRecord::Bool { b: true, type_id },
-                "false" => ValueRecord::Bool { b: false, type_id },
-                _ => ValueRecord::Raw {
-                    r: value.to_string(),
-                    type_id,
-                },
-            },
+            Some("Bool") => {
+                let type_id = self.ensure_type(TypeKind::Bool, "Bool");
+                match value {
+                    "true" => ValueRecord::Bool { b: true, type_id },
+                    "false" => ValueRecord::Bool { b: false, type_id },
+                    _ => ValueRecord::Raw {
+                        r: value.to_string(),
+                        type_id,
+                    },
+                }
+            }
             // Cadence Strings round-trip verbatim.
-            Some("String") => ValueRecord::String {
-                text: value.to_string(),
-                type_id,
-            },
+            Some("String") => {
+                let type_id = self.ensure_type(TypeKind::String, "String");
+                ValueRecord::String {
+                    text: value.to_string(),
+                    type_id,
+                }
+            }
             // Numeric types parse to i64 when they fit (this is the same
             // set the previous implementation handled implicitly via the
             // `value.parse::<i64>()` branch).
@@ -580,6 +937,7 @@ impl CadenceTracer {
                         | "Word64"
                 ) =>
             {
+                let type_id = self.ensure_type(TypeKind::Int, t);
                 if let Ok(i) = value.parse::<i64>() {
                     ValueRecord::Int { i, type_id }
                 } else {
@@ -594,6 +952,8 @@ impl CadenceTracer {
             // ct-print decoder treats the bytes as opaque rather than as
             // a typed String.
             _ => {
+                let lang = trimmed_type.unwrap_or("Int");
+                let type_id = self.ensure_type(TypeKind::Int, lang);
                 if let Ok(i) = value.parse::<i64>() {
                     ValueRecord::Int { i, type_id }
                 } else {
@@ -783,6 +1143,23 @@ mod tests {
             events[0],
             TraceEvent::Error {
                 message: "pre-condition failed".to_string(),
+                error_kind: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_error_kind() {
+        // The optional `error_kind` discriminator distinguishes Cadence
+        // pre-condition / post-condition violations from a user-issued
+        // panic; see `convert_events`'s `EventLogKind` dispatch.
+        let input = r#"{"type":"error","message":"pre-condition failed: b != 0","error_kind":"pre"}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(
+            events[0],
+            TraceEvent::Error {
+                message: "pre-condition failed: b != 0".to_string(),
+                error_kind: Some("pre".to_string()),
             }
         );
     }
