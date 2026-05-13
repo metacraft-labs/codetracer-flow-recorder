@@ -666,7 +666,7 @@ fn test_format_flag_rejected_by_clap() {
 // ===========================================================================
 
 #[test]
-#[ignore = "requires Go helper binary (cadence-trace-helper); run with --ignored"]
+// Go helper binary auto-built by build.rs (CADENCE_HELPER_BIN_BUILT env). No #[ignore] needed.
 fn test_go_helper_compile_and_run() {
     let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let out_dir = tmp_dir.path().join("traces");
@@ -679,7 +679,7 @@ fn test_go_helper_compile_and_run() {
 }
 
 #[test]
-#[ignore = "requires Go helper binary (cadence-trace-helper); run with --ignored"]
+// Go helper binary auto-built by build.rs (CADENCE_HELPER_BIN_BUILT env). No #[ignore] needed.
 fn test_go_helper_compute_value() {
     let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let out_dir = tmp_dir.path().join("traces");
@@ -692,7 +692,7 @@ fn test_go_helper_compute_value() {
 }
 
 #[test]
-#[ignore = "requires Go helper binary (cadence-trace-helper); run with --ignored"]
+// Go helper binary auto-built by build.rs (CADENCE_HELPER_BIN_BUILT env). No #[ignore] needed.
 fn test_go_helper_variable_values() {
     let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let out_dir = tmp_dir.path().join("traces");
@@ -705,7 +705,7 @@ fn test_go_helper_variable_values() {
 }
 
 #[test]
-#[ignore = "requires Go helper binary (cadence-trace-helper); run with --ignored"]
+// Go helper binary auto-built by build.rs (CADENCE_HELPER_BIN_BUILT env). No #[ignore] needed.
 fn test_go_helper_cli_record() {
     let tmp_dir = tempfile::tempdir().expect("failed to create temp dir");
     let out_dir = tmp_dir.path().join("cli-traces");
