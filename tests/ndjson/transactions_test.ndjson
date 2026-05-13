@@ -1,0 +1,21 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"transactions_test.cdc","line":22}
+{"type":"call","name":"transaction.prepare"}
+{"type":"event","name":"CadenceTxPhase","payload":"prepare"}
+{"type":"step","file":"transactions_test.cdc","line":24}
+{"type":"variable","name":"signer","value":"auth(Storage, Capabilities) &Account#1","cadence_type":"auth(Storage, Capabilities) &Account"}
+{"type":"step","file":"transactions_test.cdc","line":26}
+{"type":"variable","name":"recipient","value":"0x02","cadence_type":"Address"}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"transactions_test.cdc","line":29}
+{"type":"call","name":"transaction.execute"}
+{"type":"event","name":"CadenceTxPhase","payload":"execute"}
+{"type":"step","file":"transactions_test.cdc","line":31}
+{"type":"variable","name":"amount","value":"42","cadence_type":"Int"}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"transactions_test.cdc","line":34}
+{"type":"call","name":"transaction.post"}
+{"type":"event","name":"CadenceTxPhase","payload":"post"}
+{"type":"step","file":"transactions_test.cdc","line":36}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"return","value":"","cadence_type":"Void"}

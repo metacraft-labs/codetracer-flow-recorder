@@ -2070,3 +2070,761 @@ fn test_resource_capability_test_resource_kind_is_typed() {
          resource handles; got {kinds:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// M10 fixtures: capabilities / paths / references / transactions /
+//               numeric_widths / address_literals
+// ---------------------------------------------------------------------------
+//
+// The five fixtures below close out the M10 top-priority gaps in Cadence-
+// specific recorder coverage:
+//
+//   * `capabilities_test`     — capability lifecycle (issue, publish,
+//                                borrow, unpublish).  Capability values
+//                                surface as `ValueRecord::Reference`.
+//   * `account_storage_test`  — `/storage`, `/public`, `/private` paths
+//                                under `account.storage.{save, borrow,
+//                                copy, load}`.  Paths surface as
+//                                `ValueRecord::Struct { domain, identifier }`.
+//   * `references_test`       — `&T`, `&{Provider}`, `auth(...) &T`.
+//                                All three surface as
+//                                `ValueRecord::Reference` (entitlement-
+//                                authorized references are `mutable: true`).
+//   * `transactions_test`     — `transaction { prepare; execute; post }`
+//                                phases, each as a distinct top-level
+//                                call frame with a paired `CadenceTxPhase:*`
+//                                io_event.
+//   * `numeric_widths_test`   — `Int8` … `UInt256` matrix.  Widths up
+//                                to 64-bit surface as `ValueRecord::Int`;
+//                                widths beyond surface as
+//                                `ValueRecord::BigInt`.
+//   * `address_literals_test` — `Address` literals.  Hex-form values
+//                                fitting in `i64` surface as
+//                                `ValueRecord::Int`; full 8-byte
+//                                addresses exceeding `i64::MAX` surface
+//                                as `ValueRecord::BigInt`.
+//
+// All tests use strict `assert_eq!` on counts, function tables, call
+// sequences, and decoded ValueRecord variants — no `>=` allowed.
+
+// --- capabilities_test.cdc ------------------------------------------------
+
+const CAPABILITIES_NDJSON: &str = include_str!("ndjson/capabilities_test.ndjson");
+
+/// Pins the capability lifecycle (issue / publish / borrow / unpublish).
+///
+/// Recorder shape: a capability value (cadence_type `Capability<&Vault>`)
+/// surfaces as `ValueRecord::Reference` with the borrowed-form text as
+/// the dereferenced payload.  Borrowed references (cadence_type `&Vault`)
+/// share the same Reference variant.  The publish / unpublish
+/// transitions surface as `event` NDJSON entries that route through
+/// `EventLogKind::EvmEvent` → `ioStderr` io_events with the path
+/// captured in `text`.
+#[test]
+fn test_capabilities_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_capabilities_test_via_ct_print_full",
+        "capabilities_test.cdc",
+        CAPABILITIES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts} (CapabilityPublish + CapabilityUnpublish)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 2 call_entry + 2 call_exit + 2 io = 14 events
+    assert_eq!(events.len(), 14, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec!["main".to_string(), "compute".to_string()]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec!["compute".to_string(), "main".to_string()]
+    );
+
+    // ----- Capability `cap` surfaces as ValueRecord::Reference --------
+    let cap_var = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "cap")
+        .expect("cap should be present");
+    assert_eq!(
+        cap_var["value"]["kind"].as_str(),
+        Some("Reference"),
+        "capability must decode as ValueRecord::Reference; got {}",
+        cap_var["value"]
+    );
+    assert_eq!(
+        cap_var["value"]["mutable"].as_bool(),
+        Some(false),
+        "Capability is a read-only reference",
+    );
+    // dereferenced payload carries the printed form so the consumer
+    // can re-render the capability without re-parsing.
+    let cap_deref = &cap_var["value"]["dereferenced"];
+    assert_eq!(cap_deref["kind"].as_str(), Some("String"));
+    assert_eq!(
+        cap_deref["text"].as_str(),
+        Some("Capability<&Vault>(/storage/Vault)"),
+    );
+
+    // ----- Borrowed reference `ref` surfaces as ValueRecord::Reference -
+    let ref_var = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "ref")
+        .expect("ref should be present");
+    assert_eq!(
+        ref_var["value"]["kind"].as_str(),
+        Some("Reference"),
+        "borrowed reference must decode as ValueRecord::Reference; got {}",
+        ref_var["value"]
+    );
+    assert_eq!(ref_var["value"]["mutable"].as_bool(), Some(false));
+
+    // ----- io_events: CapabilityPublish + CapabilityUnpublish --------
+    let io_events: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(io_events.len(), 2);
+    let io_summary: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            let kind = e["io_kind"].as_str().unwrap_or("?");
+            let text = e["text"].as_str().unwrap_or("?");
+            (kind, text)
+        })
+        .collect();
+    assert_eq!(
+        io_summary,
+        vec![
+            ("ioStderr", "/public/Vault"),
+            ("ioStderr", "/public/Vault"),
+        ],
+        "capability publish/unpublish payloads"
+    );
+
+    // ----- Returns ---------------------------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- account_storage_test.cdc ---------------------------------------------
+
+const ACCOUNT_STORAGE_NDJSON: &str =
+    include_str!("ndjson/account_storage_test.ndjson");
+
+/// Pins `/storage` / `/public` / `/private` path operations.
+///
+/// Each `Path` argument (e.g. `/storage/Vault`) must surface as a typed
+/// `ValueRecord::Struct { [String "domain", String "identifier"] }` —
+/// the canonical Cadence Path shape — so the frontend can resolve the
+/// domain (`storage` / `public` / `private`) and identifier
+/// (`Vault` / `Config` / ...) without re-parsing the slash form.
+#[test]
+fn test_account_storage_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_account_storage_test_via_ct_print_full",
+        "account_storage_test.cdc",
+        ACCOUNT_STORAGE_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 13 explicit step + 2 implicit steps from resource_create / destroy
+    // (each lifecycle event also calls `register_step` at its line) +
+    // 1 implicit start step from `TraceWriter::start` = 16.
+    assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 2 resource lifecycle events (create + destroy).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 16 steps + 2 call_entry + 2 call_exit + 2 io = 22 events
+    assert_eq!(events.len(), 22, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each Path surfaces as a typed Struct {domain, identifier} -
+    let path_vars: Vec<(String, String, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(
+                name.as_str(),
+                "save_path" | "borrow_path" | "config_path" | "copy_path" | "load_path"
+            ) {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Struct"),
+                "Path values must decode as ValueRecord::Struct \
+                 {{domain, identifier}}; got {} for {}",
+                v["value"],
+                name
+            );
+            let fields = v["value"]["field_values"].as_array()?;
+            assert_eq!(
+                fields.len(),
+                2,
+                "Path Struct must have two fields (domain, identifier)"
+            );
+            let domain = fields[0]["text"].as_str()?.to_string();
+            let ident = fields[1]["text"].as_str()?.to_string();
+            assert_eq!(fields[0]["kind"].as_str(), Some("String"));
+            assert_eq!(fields[1]["kind"].as_str(), Some("String"));
+            Some((name, domain, ident))
+        })
+        .collect();
+    assert_eq!(
+        path_vars,
+        vec![
+            ("save_path".into(),   "storage".into(), "Vault".into()),
+            ("borrow_path".into(), "storage".into(), "Vault".into()),
+            ("config_path".into(), "storage".into(), "Config".into()),
+            ("copy_path".into(),   "storage".into(), "Config".into()),
+            ("load_path".into(),   "storage".into(), "Vault".into()),
+        ]
+    );
+
+    // ----- Returns: compute=242, main=242 ----------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(242), Some(242)]);
+}
+
+// --- references_test.cdc --------------------------------------------------
+
+const REFERENCES_NDJSON: &str = include_str!("ndjson/references_test.ndjson");
+
+/// Pins the three reference forms: `&T`, `&{Provider}`, `auth(...) &T`.
+/// All three surface as `ValueRecord::Reference`, with the
+/// `auth(...)`-authorized reference flagged `mutable: true` (entitlement-
+/// authorized references can mutate the underlying resource).
+#[test]
+fn test_references_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_references_test_via_ct_print_full",
+        "references_test.cdc",
+        REFERENCES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "compute",
+            "read_plain",
+            "read_restricted",
+            "apply_withdraw",
+        ]
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 13 explicit step + 2 implicit steps from resource_create / destroy
+    // + 1 implicit start step = 16.
+    assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    // 2 resource lifecycle events (create + destroy).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 16 steps + 5 call_entry + 5 call_exit + 2 io = 28 events
+    assert_eq!(events.len(), 28, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "read_plain".to_string(),
+            "read_restricted".to_string(),
+            "apply_withdraw".to_string(),
+        ]
+    );
+
+    // ----- Each reference surfaces as ValueRecord::Reference ---------
+    let collect_ref = |name: &str| -> serde_json::Value {
+        doc["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "step")
+            .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+            .find(|v| v["varname"] == name)
+            .unwrap_or_else(|| panic!("{name} not found"))
+    };
+
+    let plain = collect_ref("plain");
+    assert_eq!(plain["value"]["kind"].as_str(), Some("Reference"));
+    assert_eq!(plain["value"]["mutable"].as_bool(), Some(false));
+
+    let restricted = collect_ref("restricted");
+    assert_eq!(restricted["value"]["kind"].as_str(), Some("Reference"));
+    assert_eq!(restricted["value"]["mutable"].as_bool(), Some(false));
+
+    let entitled = collect_ref("entitled");
+    assert_eq!(entitled["value"]["kind"].as_str(), Some("Reference"));
+    assert_eq!(
+        entitled["value"]["mutable"].as_bool(),
+        Some(true),
+        "auth(Withdraw) reference is mutable (entitlement-authorized)",
+    );
+
+    // ----- Returns: read_plain=100, read_restricted=100,
+    //                apply_withdraw=25, compute=225, main=225 ---------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(100), Some(100), Some(25), Some(225), Some(225)]
+    );
+}
+
+// --- transactions_test.cdc ------------------------------------------------
+
+const TRANSACTIONS_NDJSON: &str = include_str!("ndjson/transactions_test.ndjson");
+
+/// Pins the `transaction { prepare; execute; post }` phase model.
+///
+/// Each phase surfaces as a distinct top-level call frame
+/// (`transaction.prepare`, `transaction.execute`, `transaction.post`)
+/// in the function table, and a phase-boundary `CadenceTxPhase`
+/// io_event is emitted at each entry so the frontend can highlight
+/// the phase transitions.  The `auth(Storage, Capabilities) &Account`
+/// signer surfaces as `ValueRecord::Reference` (entitlement-authorized
+/// references → `mutable: true`).
+#[test]
+fn test_transactions_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_transactions_test_via_ct_print_full",
+        "transactions_test.cdc",
+        TRANSACTIONS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table: each phase as a top-level call frame -----
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "transaction.prepare",
+            "transaction.execute",
+            "transaction.post",
+        ]
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(3),
+        "io_events; counts={counts} (one CadenceTxPhase event per phase)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 4 call_entry + 4 call_exit + 3 io = 19 events
+    assert_eq!(events.len(), 19, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call sequence: main → prepare → execute → post -----------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "transaction.prepare".to_string(),
+            "transaction.execute".to_string(),
+            "transaction.post".to_string(),
+        ]
+    );
+    // Each phase exits before the next one enters (siblings, not
+    // nested), then main exits last.
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "transaction.prepare".to_string(),
+            "transaction.execute".to_string(),
+            "transaction.post".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Signer reference: auth(Storage, Capabilities) &Account ----
+    let signer = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "signer")
+        .expect("signer should be present");
+    assert_eq!(
+        signer["value"]["kind"].as_str(),
+        Some("Reference"),
+        "auth(...) &Account must decode as ValueRecord::Reference; got {}",
+        signer["value"]
+    );
+    assert_eq!(
+        signer["value"]["mutable"].as_bool(),
+        Some(true),
+        "entitlement-authorized signer reference is mutable",
+    );
+
+    // ----- io_events: CadenceTxPhase × 3 -----------------------------
+    let io_events: Vec<&serde_json::Value> =
+        events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(io_events.len(), 3);
+    let phase_payloads: Vec<&str> = io_events
+        .iter()
+        .map(|e| e["text"].as_str().unwrap_or("?"))
+        .collect();
+    assert_eq!(phase_payloads, vec!["prepare", "execute", "post"]);
+    for io in &io_events {
+        assert_eq!(io["io_kind"].as_str(), Some("ioStderr"));
+    }
+}
+
+// --- numeric_widths_test.cdc ----------------------------------------------
+
+const NUMERIC_WIDTHS_NDJSON: &str =
+    include_str!("ndjson/numeric_widths_test.ndjson");
+
+/// Pins Cadence's integer-width matrix.
+///
+/// Widths up to 64-bit (`Int8` / `Int16` / `Int32` / `Int64` /
+/// `UInt32` / `UInt64`) surface as `ValueRecord::Int` (the value
+/// round-trips through `i64`).  Widths beyond 64-bit (`Int128` /
+/// `UInt128` / `UInt256`) surface as `ValueRecord::BigInt` with the
+/// exact big-endian unsigned magnitude preserved.  Closes the M9
+/// known limitation that wide integers fell back to `ValueRecord::Raw`.
+#[test]
+fn test_numeric_widths_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_numeric_widths_test_via_ct_print_full",
+        "numeric_widths_test.cdc",
+        NUMERIC_WIDTHS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 12 steps + 2 call_entry + 2 call_exit = 16 events
+    assert_eq!(events.len(), 16, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Widths <= 64-bit surface as ValueRecord::Int --------------
+    let int_widths: Vec<(String, i64)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(
+                name.as_str(),
+                "i8_val" | "i16_val" | "i32_val" | "i64_val" | "u32_val" | "u64_val"
+            ) {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Int"),
+                "<= 64-bit Cadence integer must decode as ValueRecord::Int; \
+                 got {} for {}",
+                v["value"],
+                name
+            );
+            let i = v["value"]["i"].as_i64()?;
+            Some((name, i))
+        })
+        .collect();
+    assert_eq!(
+        int_widths,
+        vec![
+            ("i8_val".into(),  100),
+            ("i16_val".into(), 30000),
+            ("i32_val".into(), 2000000000),
+            ("i64_val".into(), 9223372036854775000),
+            ("u32_val".into(), 4000000000),
+            ("u64_val".into(), 9000000000000000000),
+        ]
+    );
+
+    // ----- Widths > 64-bit surface as ValueRecord::BigInt ------------
+    let big_vars: Vec<(String, bool, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "big_i128" | "big_u128" | "big_u256") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("BigInt"),
+                "> 64-bit Cadence integer must decode as ValueRecord::BigInt; \
+                 got {} for {}",
+                v["value"],
+                name
+            );
+            let neg = v["value"]["negative"].as_bool()?;
+            let hex = v["value"]["b_hex"].as_str()?.to_string();
+            Some((name, neg, hex))
+        })
+        .collect();
+    // big_i128 = 2^126 = 0x40 followed by 15 zero bytes.
+    // big_u128 = 2^128 - 1 = sixteen 0xff bytes.
+    // big_u256 = 2^200      = 0x01 followed by 25 zero bytes.
+    assert_eq!(
+        big_vars,
+        vec![
+            (
+                "big_i128".into(),
+                false,
+                "40000000000000000000000000000000".into(),
+            ),
+            (
+                "big_u128".into(),
+                false,
+                "ffffffffffffffffffffffffffffffff".into(),
+            ),
+            (
+                "big_u256".into(),
+                false,
+                "0100000000000000000000000000000000000000000000000000".into(),
+            ),
+        ]
+    );
+
+    // ----- Returns ---------------------------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(1), Some(1)]);
+}
+
+// --- address_literals_test.cdc --------------------------------------------
+
+const ADDRESS_LITERALS_NDJSON: &str =
+    include_str!("ndjson/address_literals_test.ndjson");
+
+/// Pins `Address` literals.
+///
+/// Small addresses (e.g. `0x01`) fit in `i64` and surface as
+/// `ValueRecord::Int` (matching the M2 hex-form convention).
+/// Full 8-byte addresses that exceed `i64::MAX`
+/// (e.g. `0xf8d6e0586b0a20c7`, a real Flow testnet address) surface
+/// as `ValueRecord::BigInt` with the 8 raw bytes preserved.  Closes
+/// the M9 known limitation that `Address` fell back to
+/// `ValueRecord::Raw`.
+#[test]
+fn test_address_literals_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_address_literals_test_via_ct_print_full",
+        "address_literals_test.cdc",
+        ADDRESS_LITERALS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 2 call_entry + 2 call_exit = 12 events
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Small address (`0x01`) surfaces as ValueRecord::Int -------
+    let small: Vec<(String, i64)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "a" | "a_alt") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Int"),
+                "i64-fitting Address must decode as ValueRecord::Int; got {}",
+                v["value"]
+            );
+            let i = v["value"]["i"].as_i64()?;
+            Some((name, i))
+        })
+        .collect();
+    assert_eq!(
+        small,
+        vec![("a".into(), 1), ("a_alt".into(), 1)],
+    );
+
+    // ----- Full 8-byte address surfaces as ValueRecord::BigInt -------
+    let b = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "b")
+        .expect("b should be present");
+    assert_eq!(
+        b["value"]["kind"].as_str(),
+        Some("BigInt"),
+        "> i64::MAX Address must decode as ValueRecord::BigInt; got {}",
+        b["value"]
+    );
+    assert_eq!(b["value"]["negative"].as_bool(), Some(false));
+    assert_eq!(
+        b["value"]["b_hex"].as_str(),
+        Some("f8d6e0586b0a20c7"),
+        "8-byte big-endian Address payload",
+    );
+
+    // ----- Bool comparisons round-trip as ValueRecord::Bool ----------
+    let bool_vars: Vec<(String, bool)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "eq_small" | "eq_mixed") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Bool"),
+                "Bool comparison result must decode as ValueRecord::Bool; got {}",
+                v["value"]
+            );
+            let b = v["value"]["b"].as_bool()?;
+            Some((name, b))
+        })
+        .collect();
+    assert_eq!(
+        bool_vars,
+        vec![
+            ("eq_small".into(), true),
+            ("eq_mixed".into(), false),
+        ]
+    );
+}
