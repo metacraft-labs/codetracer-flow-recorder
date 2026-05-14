@@ -1,0 +1,45 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"resource_collections_test.cdc","line":58}
+{"type":"call","name":"compute"}
+{"type":"step","file":"resource_collections_test.cdc","line":34}
+{"type":"variable","name":"arr","value":"[]","cadence_type":"[@Vault]"}
+{"type":"step","file":"resource_collections_test.cdc","line":35}
+{"type":"resource_create","resource_type":"Vault","uuid":9001,"owner":"alice","file":"resource_collections_test.cdc","line":35}
+{"type":"variable","name":"arr","value":"[@Vault#9001@alice]","cadence_type":"[@Vault]"}
+{"type":"step","file":"resource_collections_test.cdc","line":36}
+{"type":"resource_create","resource_type":"Vault","uuid":9002,"owner":"alice","file":"resource_collections_test.cdc","line":36}
+{"type":"variable","name":"arr","value":"[@Vault#9001@alice, @Vault#9002@alice]","cadence_type":"[@Vault]"}
+{"type":"step","file":"resource_collections_test.cdc","line":37}
+{"type":"variable","name":"head","value":"@Vault#9001@alice","cadence_type":"@Vault"}
+{"type":"variable","name":"arr","value":"[@Vault#9002@alice]","cadence_type":"[@Vault]"}
+{"type":"step","file":"resource_collections_test.cdc","line":41}
+{"type":"variable","name":"dict","value":"{}","cadence_type":"{Address: @Vault}"}
+{"type":"step","file":"resource_collections_test.cdc","line":42}
+{"type":"resource_create","resource_type":"Vault","uuid":9003,"owner":"alice","file":"resource_collections_test.cdc","line":42}
+{"type":"variable","name":"dict","value":"{0x01: @Vault#9003@alice}","cadence_type":"{Address: @Vault}"}
+{"type":"step","file":"resource_collections_test.cdc","line":43}
+{"type":"resource_create","resource_type":"Vault","uuid":9004,"owner":"bob","file":"resource_collections_test.cdc","line":43}
+{"type":"variable","name":"dict","value":"{0x01: @Vault#9003@alice, 0x02: @Vault#9004@bob}","cadence_type":"{Address: @Vault}"}
+{"type":"step","file":"resource_collections_test.cdc","line":44}
+{"type":"variable","name":"removed","value":"@Vault#9003@alice","cadence_type":"@Vault"}
+{"type":"variable","name":"dict","value":"{0x02: @Vault#9004@bob}","cadence_type":"{Address: @Vault}"}
+{"type":"step","file":"resource_collections_test.cdc","line":47}
+{"type":"resource_create","resource_type":"Vault","uuid":9005,"owner":"alice","file":"resource_collections_test.cdc","line":47}
+{"type":"variable","name":"opt","value":"@Vault#9005@alice","cadence_type":"@Vault?"}
+{"type":"step","file":"resource_collections_test.cdc","line":48}
+{"type":"variable","name":"drained","value":"@Vault#9005@alice","cadence_type":"@Vault"}
+{"type":"variable","name":"opt","value":"nil","cadence_type":"@Vault?"}
+{"type":"step","file":"resource_collections_test.cdc","line":50}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9001,"owner":"alice","file":"resource_collections_test.cdc","line":50}
+{"type":"step","file":"resource_collections_test.cdc","line":51}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9003,"owner":"alice","file":"resource_collections_test.cdc","line":51}
+{"type":"step","file":"resource_collections_test.cdc","line":52}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9005,"owner":"alice","file":"resource_collections_test.cdc","line":52}
+{"type":"step","file":"resource_collections_test.cdc","line":53}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9002,"owner":"alice","file":"resource_collections_test.cdc","line":53}
+{"type":"step","file":"resource_collections_test.cdc","line":54}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9004,"owner":"bob","file":"resource_collections_test.cdc","line":54}
+{"type":"step","file":"resource_collections_test.cdc","line":55}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"resource_collections_test.cdc","line":59}
+{"type":"return","value":"0","cadence_type":"Int"}

@@ -48,6 +48,32 @@ pub enum TraceEvent {
         name: String,
         #[serde(default)]
         args: Vec<TraceArg>,
+        /// Optional Cadence visibility modifier for the called
+        /// function declaration (`access(self)` / `access(contract)` /
+        /// `access(account)` / `access(all)`).  Recognised values are
+        /// `"self"`, `"contract"`, `"account"`, `"all"`; any other
+        /// (or absent) value skips the visibility-tag io_event.
+        ///
+        /// Spec rationale: the M10 strict pin
+        /// `test_access_control_test_via_ct_print_full` requires every
+        /// call frame to surface its source-declared visibility so the
+        /// frontend can highlight access-violation paths.  We mirror
+        /// the M9 `error_kind` dispatch and route the tag through a
+        /// dedicated `CadenceAccess:<function>:<Tag>` io_event whose
+        /// text payload survives the multi-stream writer's metadata
+        /// drop.
+        #[serde(default)]
+        access: Option<String>,
+        /// When `true`, the called function is the Cadence script
+        /// entry point (`access(all) fun main(): X`).  The recorder
+        /// emits a tagged `CadenceScriptEntry:<function>` io_event
+        /// so the strict pin in
+        /// `test_scripts_test_via_ct_print_full` can pin the script-
+        /// entry boundary on the io-event channel — distinguishing
+        /// the script form from a transaction form on the same
+        /// `main`-named entry.
+        #[serde(default)]
+        script: bool,
     },
     #[serde(rename = "return")]
     Return {
@@ -123,6 +149,23 @@ pub enum TraceEvent {
         to_owner: String,
         file: String,
         line: u32,
+    },
+
+    /// Force-unwrap of a `nil` optional (`foo!` over `nil`).  Surfaces
+    /// as a tagged `ForceNilUnwrap:<context>` io_event routed through
+    /// `EventLogKind::TraceLogEvent` so the failure mode is
+    /// distinguishable from a generic Cadence `panic` on the
+    /// io-event channel.  Closes the M10
+    /// `optional_chaining_test` deliverable: the strict pin asserts
+    /// `(io_kind, text) == ("ioStderr", "ForceNilUnwrap:<ctx>")`.
+    #[serde(rename = "force_nil_unwrap")]
+    ForceNilUnwrap {
+        /// A short descriptor for the unwrap site (e.g. the local
+        /// name or the chain expression text).  Free-form for now;
+        /// the Go helper will fill in the source-printed form once
+        /// it ships an OnStatement-based optional tracker.
+        #[serde(default)]
+        context: String,
     },
 
     /// Cadence `emit Foo(...)` event with structured field values.
@@ -412,6 +455,21 @@ fn stable_address_hash(s: &str) -> u64 {
     h & 0x7fffffffffffffff
 }
 
+/// Map a Cadence access modifier (`self` / `contract` / `account` /
+/// `all`) to the canonical `Access<Tag>` visibility tag the recorder
+/// surfaces in the `CadenceAccess:<function>:<Tag>` io_event.
+/// Returns `None` for unrecognised modifiers so the recorder can
+/// silently skip the io_event when the helper omits the field.
+fn visibility_tag(access: &str) -> Option<&'static str> {
+    match access {
+        "self" => Some("AccessSelf"),
+        "contract" => Some("AccessContract"),
+        "account" => Some("AccessAccount"),
+        "all" => Some("AccessAll"),
+        _ => None,
+    }
+}
+
 /// Strip a single leading + trailing pair of `"` (Cadence prints
 /// dictionary keys as JSON strings).
 fn strip_quotes(s: &str) -> &str {
@@ -668,7 +726,12 @@ impl CadenceTracer {
                     let val_record = self.value_record(value, cadence_type.as_deref());
                     self.register_typed_variable(name, val_record);
                 }
-                TraceEvent::Call { name, args } => {
+                TraceEvent::Call {
+                    name,
+                    args,
+                    access,
+                    script,
+                } => {
                     let fn_id = TraceWriter::ensure_function_id(
                         &mut *self.writer,
                         name,
@@ -682,6 +745,35 @@ impl CadenceTracer {
                         call_args.push(full_arg);
                     }
                     TraceWriter::register_call(&mut *self.writer, fn_id, call_args);
+
+                    // Emit a tagged visibility io_event when the
+                    // helper-side `access` discriminator is present so
+                    // the call frame's source-declared visibility
+                    // survives the multi-stream writer.  Mirrors the
+                    // pre/post `error_kind` dispatch in `Error`.
+                    if let Some(tag) = access.as_deref().and_then(visibility_tag) {
+                        TraceWriter::register_special_event(
+                            &mut *self.writer,
+                            EventLogKind::TraceLogEvent,
+                            &format!("CadenceAccess:{}:{}", name, tag),
+                            &format!("CadenceAccess:{}:{}", name, tag),
+                        );
+                    }
+
+                    // Emit a tagged script-entry io_event when the
+                    // helper flags this call as the Cadence script
+                    // entry point.  Surfaces the boundary on the
+                    // io-event channel so the strict pin can pin
+                    // the script form independently of a same-named
+                    // transaction `main`.
+                    if *script {
+                        TraceWriter::register_special_event(
+                            &mut *self.writer,
+                            EventLogKind::TraceLogEvent,
+                            &format!("CadenceScriptEntry:{}", name),
+                            &format!("CadenceScriptEntry:{}", name),
+                        );
+                    }
                 }
                 TraceEvent::Return {
                     value,
@@ -851,6 +943,20 @@ impl CadenceTracer {
                             "ResourceOwnerChange:{}#{}: {} -> {}",
                             resource_type, uuid, from_owner, to_owner
                         ),
+                    );
+                }
+
+                TraceEvent::ForceNilUnwrap { context } => {
+                    // Tag carries the literal `ForceNilUnwrap:` prefix
+                    // in the text payload so the multi-stream writer
+                    // (which drops the metadata field) preserves the
+                    // distinguishing tag in the strict pin's `text`
+                    // surface.  Symmetric with `ResourceOwnerChange`.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("ForceNilUnwrap:{}", context),
+                        &format!("ForceNilUnwrap:{}", context),
                     );
                 }
 
@@ -1462,6 +1568,8 @@ mod tests {
             TraceEvent::Call {
                 name: "compute".to_string(),
                 args: Vec::new(),
+                access: None,
+                script: false,
             }
         );
     }
@@ -1487,6 +1595,28 @@ mod tests {
                         cadence_type: Some("Int".to_string()),
                     },
                 ],
+                access: None,
+                script: false,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_ndjson_call_access() {
+        // The optional `access` discriminator carries the source-
+        // declared Cadence visibility modifier (`access(self)` etc.)
+        // through to the recorder, where it surfaces as a tagged
+        // `CadenceAccess:<function>:<Tag>` io_event so the strict
+        // pin in `tests/test_tracer.rs` can `assert_eq!` against it.
+        let input = r#"{"type":"call","name":"reveal","access":"self"}"#;
+        let events = parse_ndjson(input).unwrap();
+        assert_eq!(
+            events[0],
+            TraceEvent::Call {
+                name: "reveal".to_string(),
+                args: Vec::new(),
+                access: Some("self".to_string()),
+                script: false,
             }
         );
     }
@@ -1575,6 +1705,8 @@ mod tests {
             TraceEvent::Call {
                 name: "main".to_string(),
                 args: Vec::new(),
+                access: None,
+                script: false,
             }
         );
 
