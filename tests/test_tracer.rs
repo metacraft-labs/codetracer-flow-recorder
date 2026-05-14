@@ -545,9 +545,7 @@ fn test_recorded_trace_via_ct_print_json() {
     ];
     for (name, value) in expected {
         assert!(
-            observed_vars
-                .iter()
-                .any(|(n, v)| n == name && v == value),
+            observed_vars.iter().any(|(n, v)| n == name && v == value),
             "expected step variable `{name}` = {value} in --full output; \
              observed = {observed_vars:?}"
         );
@@ -816,8 +814,8 @@ fn record_and_dump_full(
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let doc: serde_json::Value = serde_json::from_slice(&output.stdout)
-        .expect("ct-print --full should emit valid JSON");
+    let doc: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("ct-print --full should emit valid JSON");
 
     drop(tmp_dir);
 
@@ -878,10 +876,7 @@ fn observed_call_exit_sequence(doc: &serde_json::Value) -> Vec<String> {
 /// `int_only` are skipped (used when the same step contains a mix of
 /// Int + non-Int values; the non-Int ones are checked with a separate
 /// helper).
-fn observed_int_var_sequence(
-    doc: &serde_json::Value,
-    int_only: &[&str],
-) -> Vec<(String, i64)> {
+fn observed_int_var_sequence(doc: &serde_json::Value, int_only: &[&str]) -> Vec<(String, i64)> {
     let mut out = Vec::new();
     for ev in doc["events"].as_array().expect("events array") {
         if ev["kind"] != "step" {
@@ -922,10 +917,7 @@ fn observed_int_var_sequence(
 /// outside the i64-fits set, and any future compound forms beyond
 /// arrays / dicts / structs / optionals / `@Resource` handles).
 #[allow(dead_code)]
-fn observed_raw_var_sequence(
-    doc: &serde_json::Value,
-    raw_only: &[&str],
-) -> Vec<(String, String)> {
+fn observed_raw_var_sequence(doc: &serde_json::Value, raw_only: &[&str]) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for ev in doc["events"].as_array().expect("events array") {
         if ev["kind"] != "step" {
@@ -1496,10 +1488,7 @@ fn test_collections_test_via_ct_print_full() {
         ("doubled".into(), 14),
     ];
     assert_eq!(
-        observed_int_var_sequence(
-            &doc,
-            &["total", "apple_price", "dist_sq", "doubled"],
-        ),
+        observed_int_var_sequence(&doc, &["total", "apple_price", "dist_sq", "doubled"],),
         expected_ints
     );
 
@@ -1640,14 +1629,7 @@ fn test_collections_test_via_ct_print_full() {
     // point_distance_sq=25, maybe_double=14, compute=79, main=79.
     assert_eq!(
         observed_int_returns(&doc),
-        vec![
-            Some(10),
-            Some(30),
-            Some(25),
-            Some(14),
-            Some(79),
-            Some(79),
-        ],
+        vec![Some(10), Some(30), Some(25), Some(14), Some(79), Some(79),],
     );
 }
 
@@ -1807,15 +1789,7 @@ fn test_error_paths_test_via_ct_print_full() {
     // (post-fail), panicking_call=Void --------------------------------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![
-            Some(2),
-            Some(3),
-            Some(3),
-            Some(3),
-            None,
-            None,
-            None,
-        ],
+        vec![Some(2), Some(3), Some(3), Some(3), None, None, None,],
     );
 
     // ----- IO events: pre-condition, post-condition, panic ------------
@@ -1823,10 +1797,7 @@ fn test_error_paths_test_via_ct_print_full() {
     // `EventLogKind::TraceLogEvent` (= `ioStderr`); the explicit panic
     // keeps `EventLogKind::Error` (= `ioError`).  Order matches the
     // emission order in the fixture.
-    let io_events: Vec<&serde_json::Value> = events
-        .iter()
-        .filter(|e| e["kind"] == "io")
-        .collect();
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
         io_events.len(),
         3,
@@ -1848,10 +1819,7 @@ fn test_error_paths_test_via_ct_print_full() {
                 "ioStderr",
                 "pre-condition failed: denominator must be non-zero",
             ),
-            (
-                "ioStderr",
-                "post-condition failed: division must be exact",
-            ),
+            ("ioStderr", "post-condition failed: division must be exact",),
             ("ioError", "intentional panic for trace coverage"),
         ],
         "Pre/post-condition failures must route through `TraceLogEvent` \
@@ -1880,8 +1848,7 @@ fn test_error_paths_test_distinguishes_pre_post_from_panic() {
 
 // --- resource_capability_test.cdc -----------------------------------------
 
-const RESOURCE_CAPABILITY_NDJSON: &str =
-    include_str!("ndjson/resource_capability_test.ndjson");
+const RESOURCE_CAPABILITY_NDJSON: &str = include_str!("ndjson/resource_capability_test.ndjson");
 
 /// Records `resource_capability_test.cdc` (NDJSON-driven) and asserts
 /// on the **exact** event shape.  Cadence-specific coverage:
@@ -1957,9 +1924,12 @@ fn test_resource_capability_test_via_ct_print_full() {
     );
 
     // ----- IO events: 4 ioStderr resource-log entries -----------------
-    let io_events: Vec<&serde_json::Value> =
-        events.iter().filter(|e| e["kind"] == "io").collect();
-    assert_eq!(io_events.len(), 4, "exactly four io events (resource lifecycle)");
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(
+        io_events.len(),
+        4,
+        "exactly four io events (resource lifecycle)"
+    );
     for io in &io_events {
         assert_eq!(
             io["io_kind"].as_str(),
@@ -1975,10 +1945,7 @@ fn test_resource_capability_test_via_ct_print_full() {
     // balance=42 (inside deposit) and final_balance=42 (in compute).
     assert_eq!(
         observed_int_var_sequence(&doc, &["balance", "final_balance"]),
-        vec![
-            ("balance".into(), 42),
-            ("final_balance".into(), 42),
-        ],
+        vec![("balance".into(), 42), ("final_balance".into(), 42),],
     );
 
     // ----- Resource-handle lifecycle variables surface as `String` ---
@@ -1987,17 +1954,11 @@ fn test_resource_capability_test_via_ct_print_full() {
     // text payloads.  (A future fix would lift these to a dedicated
     // Resource variant — see the `#[ignore]`d sibling test below.)
     assert_eq!(
-        observed_string_var_sequence(
-            &doc,
-            &["@resource:Coin#7001", "@resource:Vault#7002"],
-        ),
+        observed_string_var_sequence(&doc, &["@resource:Coin#7001", "@resource:Vault#7002"],),
         vec![
             ("@resource:Coin#7001".into(), "created(owner=0x01)".into()),
             ("@resource:Vault#7002".into(), "created(owner=0x01)".into()),
-            (
-                "@resource:Coin#7001".into(),
-                "destroyed(owner=0x01)".into(),
-            ),
+            ("@resource:Coin#7001".into(), "destroyed(owner=0x01)".into(),),
             (
                 "@resource:Vault#7002".into(),
                 "destroyed(owner=0x01)".into(),
@@ -2036,10 +1997,7 @@ fn test_resource_capability_test_via_ct_print_full() {
     assert_eq!(coin_fields[1]["i"].as_i64(), Some(7001));
 
     // ----- Returns: deposit=Void, compute=42, main=42 ---------------
-    assert_eq!(
-        observed_int_returns(&doc),
-        vec![None, Some(42), Some(42)],
-    );
+    assert_eq!(observed_int_returns(&doc), vec![None, Some(42), Some(42)],);
 }
 
 #[test]
@@ -2213,8 +2171,7 @@ fn test_capabilities_test_via_ct_print_full() {
     assert_eq!(ref_var["value"]["mutable"].as_bool(), Some(false));
 
     // ----- io_events: CapabilityPublish + CapabilityUnpublish --------
-    let io_events: Vec<&serde_json::Value> =
-        events.iter().filter(|e| e["kind"] == "io").collect();
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(io_events.len(), 2);
     let io_summary: Vec<(&str, &str)> = io_events
         .iter()
@@ -2226,10 +2183,7 @@ fn test_capabilities_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         io_summary,
-        vec![
-            ("ioStderr", "/public/Vault"),
-            ("ioStderr", "/public/Vault"),
-        ],
+        vec![("ioStderr", "/public/Vault"), ("ioStderr", "/public/Vault"),],
         "capability publish/unpublish payloads"
     );
 
@@ -2239,8 +2193,7 @@ fn test_capabilities_test_via_ct_print_full() {
 
 // --- account_storage_test.cdc ---------------------------------------------
 
-const ACCOUNT_STORAGE_NDJSON: &str =
-    include_str!("ndjson/account_storage_test.ndjson");
+const ACCOUNT_STORAGE_NDJSON: &str = include_str!("ndjson/account_storage_test.ndjson");
 
 /// Pins `/storage` / `/public` / `/private` path operations.
 ///
@@ -2328,11 +2281,11 @@ fn test_account_storage_test_via_ct_print_full() {
     assert_eq!(
         path_vars,
         vec![
-            ("save_path".into(),   "storage".into(), "Vault".into()),
+            ("save_path".into(), "storage".into(), "Vault".into()),
             ("borrow_path".into(), "storage".into(), "Vault".into()),
             ("config_path".into(), "storage".into(), "Config".into()),
-            ("copy_path".into(),   "storage".into(), "Config".into()),
-            ("load_path".into(),   "storage".into(), "Vault".into()),
+            ("copy_path".into(), "storage".into(), "Config".into()),
+            ("load_path".into(), "storage".into(), "Vault".into()),
         ]
     );
 
@@ -2545,8 +2498,7 @@ fn test_transactions_test_via_ct_print_full() {
     );
 
     // ----- io_events: CadenceTxPhase × 3 -----------------------------
-    let io_events: Vec<&serde_json::Value> =
-        events.iter().filter(|e| e["kind"] == "io").collect();
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(io_events.len(), 3);
     let phase_payloads: Vec<&str> = io_events
         .iter()
@@ -2560,8 +2512,7 @@ fn test_transactions_test_via_ct_print_full() {
 
 // --- numeric_widths_test.cdc ----------------------------------------------
 
-const NUMERIC_WIDTHS_NDJSON: &str =
-    include_str!("ndjson/numeric_widths_test.ndjson");
+const NUMERIC_WIDTHS_NDJSON: &str = include_str!("ndjson/numeric_widths_test.ndjson");
 
 /// Pins Cadence's integer-width matrix.
 ///
@@ -2637,7 +2588,7 @@ fn test_numeric_widths_test_via_ct_print_full() {
     assert_eq!(
         int_widths,
         vec![
-            ("i8_val".into(),  100),
+            ("i8_val".into(), 100),
             ("i16_val".into(), 30000),
             ("i32_val".into(), 2000000000),
             ("i64_val".into(), 9223372036854775000),
@@ -2701,8 +2652,7 @@ fn test_numeric_widths_test_via_ct_print_full() {
 
 // --- address_literals_test.cdc --------------------------------------------
 
-const ADDRESS_LITERALS_NDJSON: &str =
-    include_str!("ndjson/address_literals_test.ndjson");
+const ADDRESS_LITERALS_NDJSON: &str = include_str!("ndjson/address_literals_test.ndjson");
 
 /// Pins `Address` literals.
 ///
@@ -2771,10 +2721,7 @@ fn test_address_literals_test_via_ct_print_full() {
             Some((name, i))
         })
         .collect();
-    assert_eq!(
-        small,
-        vec![("a".into(), 1), ("a_alt".into(), 1)],
-    );
+    assert_eq!(small, vec![("a".into(), 1), ("a_alt".into(), 1)],);
 
     // ----- Full 8-byte address surfaces as ValueRecord::BigInt -------
     let b = doc["events"]
@@ -2822,9 +2769,835 @@ fn test_address_literals_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         bool_vars,
+        vec![("eq_small".into(), true), ("eq_mixed".into(), false),]
+    );
+}
+
+// ---------------------------------------------------------------------------
+// M10 Round 2 fixtures: resources_full / enums / pre_post_conditions /
+//                       events_emit / interfaces
+// ---------------------------------------------------------------------------
+//
+// Round 1 closed the M10 top-priority gaps (capabilities, account_storage,
+// references, transactions, numeric_widths, address_literals).  Round 2
+// extends the strict pin coverage to the remaining high-priority Cadence
+// constructs:
+//
+//   * `resources_full_test`        — full move-operator family
+//                                    (`<-`, `<->`, shift, `<-!`, nested
+//                                    `destroy`).  Owner transitions surface
+//                                    as tagged `ResourceOwnerChange`
+//                                    io_events.
+//   * `enums_test`                  — `enum Color: UInt8 { case red; ... }`.
+//                                    Each constructor surfaces as
+//                                    `ValueRecord::Variant`; `rawValue`
+//                                    surfaces as `ValueRecord::Int` matching
+//                                    the backing-type width.
+//   * `pre_post_conditions_test`    — `pre { }` + `post { }` blocks.
+//                                    Successful evaluations are silent;
+//                                    failures surface with
+//                                    `CadencePreCondition` / `CadencePostCondition`
+//                                    metadata routing through ioStderr.
+//   * `events_emit_test`            — `event Foo(...)` declarations + `emit`.
+//                                    Each emit surfaces as a tagged
+//                                    `CadenceEmit:` io_event with all
+//                                    parameters preserved as typed
+//                                    `ValueRecord` variants.
+//   * `interfaces_test`             — `resource interface Provider`.
+//                                    Interface-restricted reference
+//                                    surfaces as `ValueRecord::Reference`,
+//                                    and the dispatched call carries both
+//                                    the concrete and interface-typed
+//                                    function names in the call table.
+
+// --- resources_full_test.cdc ---------------------------------------------
+
+const RESOURCES_FULL_NDJSON: &str = include_str!("ndjson/resources_full_test.ndjson");
+
+/// Pins the full Cadence move-operator family.
+///
+/// Each of the five move operators (`let b <- a`, swap `<->`, shift,
+/// force-unwrap `<-!`, explicit nested `destroy`) surfaces both as
+/// a typed `ValueRecord::Struct { ResourceType, ResourceUuid,
+/// ResourceOwner }` snapshot of the resource at its new home AND
+/// as a tagged `ResourceOwnerChange:<Type>#<uuid>: <from> -> <to>`
+/// io_event so the frontend can highlight the ownership transfer
+/// without re-deriving it from the snapshots.
+#[test]
+fn test_resources_full_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_resources_full_test_via_ct_print_full",
+        "resources_full_test.cdc",
+        RESOURCES_FULL_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec!["main".to_string(), "compute".to_string()]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec!["compute".to_string(), "main".to_string()]
+    );
+
+    // ----- Step indices monotonic ------------------------------------
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each resource snapshot decodes as a typed Struct
+    //       {ResourceType, ResourceUuid, ResourceOwner} -------------
+    let resource_snapshots: Vec<(String, String, i64, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(
+                name.as_str(),
+                "a" | "b" | "x" | "y" | "new_v" | "old" | "box" | "unwrapped"
+            ) {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Struct"),
+                "resource snapshot `{}` must decode as ValueRecord::Struct \
+                 (with ResourceType + ResourceUuid + ResourceOwner fields); \
+                 got {}",
+                name,
+                v["value"]
+            );
+            let fields = v["value"]["field_values"].as_array()?;
+            assert_eq!(
+                fields.len(),
+                3,
+                "resource Struct must carry 3 fields (type, uuid, owner) \
+                 for `{name}` on the move-operator path; got {fields:?}"
+            );
+            assert_eq!(fields[0]["kind"].as_str(), Some("String"));
+            assert_eq!(fields[1]["kind"].as_str(), Some("Int"));
+            assert_eq!(fields[2]["kind"].as_str(), Some("String"));
+            let ty = fields[0]["text"].as_str()?.to_string();
+            let uuid = fields[1]["i"].as_i64()?;
+            let owner = fields[2]["text"].as_str()?.to_string();
+            Some((name, ty, uuid, owner))
+        })
+        .collect();
+    assert_eq!(
+        resource_snapshots,
         vec![
-            ("eq_small".into(), true),
-            ("eq_mixed".into(), false),
+            // Plain move-assignment `let b <- a`.
+            ("a".into(), "Vault".into(), 5001, "alice".into()),
+            ("b".into(), "Vault".into(), 5001, "bob".into()),
+            // Initial create-and-bind for swap operands.
+            ("x".into(), "Vault".into(), 5002, "alice".into()),
+            ("y".into(), "Vault".into(), 5003, "bob".into()),
+            // Swap result: x and y exchange resources (and hence owners).
+            ("x".into(), "Vault".into(), 5003, "alice".into()),
+            ("y".into(), "Vault".into(), 5002, "bob".into()),
+            // Shift: new_v binds, then `let old <- x <- new_v` rotates.
+            ("new_v".into(), "Vault".into(), 5004, "alice".into()),
+            ("x".into(), "Vault".into(), 5004, "alice".into()),
+            ("old".into(), "Vault".into(), 5003, "bob".into()),
+            // Force-unwrap move: nested Vault leaves Box, owner flips.
+            ("box".into(), "Box".into(), 5005, "alice".into()),
+            ("unwrapped".into(), "Vault".into(), 5006, "bob".into()),
         ]
     );
+
+    // ----- Tagged ResourceOwnerChange io_events ----------------------
+    let events = doc["events"].as_array().expect("events array");
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+
+    // Filter to just the owner-change events (the resource lifecycle
+    // create/destroy events also route through TraceLogEvent → ioStderr,
+    // so we look for the literal `ResourceOwnerChange:` tag in `text`).
+    let owner_changes: Vec<&str> = io_events
+        .iter()
+        .filter_map(|e| e["text"].as_str())
+        .filter(|t| t.starts_with("ResourceOwnerChange:"))
+        .collect();
+    assert_eq!(
+        owner_changes,
+        vec![
+            "ResourceOwnerChange:Vault#5001: alice -> bob",
+            "ResourceOwnerChange:Vault#5003: bob -> alice",
+            "ResourceOwnerChange:Vault#5002: alice -> bob",
+            "ResourceOwnerChange:Vault#5003: alice -> bob",
+            "ResourceOwnerChange:Vault#5006: alice -> bob",
+        ],
+        "exactly five tagged owner-change io_events: one per move \
+         operator that transfers ownership (plain move, swap × 2, \
+         shift, force-unwrap)"
+    );
+
+    // Every owner-change event routes through TraceLogEvent → ioStderr.
+    for ev in io_events.iter().filter(|e| {
+        e["text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("ResourceOwnerChange:"))
+    }) {
+        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+    }
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- enums_test.cdc -------------------------------------------------------
+
+const ENUMS_NDJSON: &str = include_str!("ndjson/enums_test.ndjson");
+
+/// Pins Cadence enum cases backed by an integer width.
+///
+/// Each `Color.<case>` constructor surfaces as
+/// `ValueRecord::Variant { discriminator: "Color.<case>", contents:
+/// ValueRecord::None, type_id }` (the M9 Variant path), and each
+/// `rawValue` access surfaces as `ValueRecord::Int` matching the
+/// backing-type width (`UInt8` → an Int with `i in 0..255`).
+#[test]
+fn test_enums_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_enums_test_via_ct_print_full",
+        "enums_test.cdc",
+        ENUMS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "classify"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 18 explicit step events + 1 implicit start step = 19 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
+    // main, compute, classify×3 = 5 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    // Enums do not produce io_events.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 19 steps + 5 call_entry + 5 call_exit = 29 events.
+    assert_eq!(events.len(), 29, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "classify".to_string(),
+            "classify".to_string(),
+            "classify".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "classify".to_string(),
+            "classify".to_string(),
+            "classify".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Each enum case decodes as ValueRecord::Variant -----------
+    let enum_cases: Vec<(String, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "r" | "g" | "b" | "c") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Variant"),
+                "enum case `{}` must decode as ValueRecord::Variant; got {}",
+                name,
+                v["value"]
+            );
+            // The discriminator carries the canonical "Color.<case>"
+            // name (the M9 Variant path landed in commit 4dd2b59).
+            let discrim = v["value"]["discriminator"].as_str()?.to_string();
+            // Spec calls out `fields: []` — surfaced as the canonical
+            // empty-payload `None` inner content.
+            assert_eq!(
+                v["value"]["contents"]["kind"].as_str(),
+                Some("None"),
+                "enum Variant inner contents must be ValueRecord::None \
+                 (no fields); got {}",
+                v["value"]["contents"]
+            );
+            Some((name, discrim))
+        })
+        .collect();
+    assert_eq!(
+        enum_cases,
+        vec![
+            ("r".into(), "Color.red".into()),
+            ("g".into(), "Color.green".into()),
+            ("b".into(), "Color.blue".into()),
+            ("c".into(), "Color.red".into()),
+            ("c".into(), "Color.green".into()),
+            ("c".into(), "Color.blue".into()),
+        ]
+    );
+
+    // ----- rawValue access surfaces as ValueRecord::Int (UInt8) ------
+    // UInt8 backing type → Int with i in 0..255.  We use the existing
+    // `observed_int_var_sequence` which already enforces the
+    // ValueRecord::Int variant (and rejects any non-Int variant with
+    // a hard error).
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["r_raw", "g_raw", "b_raw"]),
+        vec![
+            ("r_raw".into(), 0),
+            ("g_raw".into(), 1),
+            ("b_raw".into(), 2),
+        ]
+    );
+
+    // ----- classify returns the case index in source order ----------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(1), Some(2), Some(3), Some(9), Some(9)]
+    );
+}
+
+// --- pre_post_conditions_test.cdc ----------------------------------------
+
+const PRE_POST_NDJSON: &str = include_str!("ndjson/pre_post_conditions_test.ndjson");
+
+/// Pins Cadence `pre { }` / `post { }` clauses across passing and
+/// failing inputs.
+///
+/// Successful evaluations are silent (no io_event for the
+/// pre/post check itself).  Failed pre-conditions surface with the
+/// `CadencePreCondition` tag (routed through
+/// `EventLogKind::TraceLogEvent` → `ioStderr`); failed
+/// post-conditions surface with `CadencePostCondition` (same
+/// channel, distinct text payload).  This tag-channel split — and
+/// the user-issued `panic` keeping the historical `Error` channel
+/// — is the load-bearing part of the M9 commit `4dd2b59`.
+#[test]
+fn test_pre_post_conditions_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_pre_post_conditions_test_via_ct_print_full",
+        "pre_post_conditions_test.cdc",
+        PRE_POST_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "deposit"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 16 explicit step events + 2 implicit steps (resource_create +
+    // resource_destroy) + 1 implicit start step = 19 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
+    // main, compute, deposit × 3 = 5 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    // 2 resource lifecycle events (create + destroy) + 2 errors
+    // (pre-condition fail + post-condition fail) = 4 io_events.  The
+    // PASSING pre/post evaluation in call 1 emits NO io_event — that
+    // is the silence guarantee being pinned here.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(4),
+        "io_events; counts={counts} (silent passing pre/post + \
+         failing pre + failing post + 2 resource lifecycle)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 19 steps + 5 call_entry + 5 call_exit + 4 io = 33 events.
+    assert_eq!(events.len(), 33, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering: main → compute → deposit×3 ---------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "deposit".to_string(),
+            "deposit".to_string(),
+            "deposit".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "deposit".to_string(),
+            "deposit".to_string(),
+            "deposit".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- IO events: 2 resource lifecycle then pre-fail then
+    //                  post-fail (in source emission order) ----------
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(io_events.len(), 4);
+
+    let io_summary: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            let kind = e["io_kind"].as_str().unwrap_or("?");
+            let text = e["text"].as_str().unwrap_or("?");
+            (kind, text)
+        })
+        .collect();
+    assert_eq!(
+        io_summary,
+        vec![
+            // 1. Account create (lifecycle).
+            ("ioStderr", "owner=alice"),
+            // 2. First failing call: pre-condition.
+            ("ioStderr", "pre-condition failed: amount must be positive"),
+            // 3. Second failing call: post-condition.
+            ("ioStderr", "post-condition failed: balance must increase"),
+            // 4. Account destroy (lifecycle).
+            ("ioStderr", "owner=alice"),
+        ],
+        "Pre/post failures route through TraceLogEvent → ioStderr \
+         with distinct text payloads.  The PASSING first call \
+         (deposit(amount: 25) → returns 125) produces NO io_event — \
+         the silence is what proves the pre/post tag dispatch is not \
+         emitting on success."
+    );
+
+    // ----- Returns: deposit#1 = 125, deposit#2 = Void (pre-fail),
+    //                deposit#3 = Void (post-fail), compute = 125,
+    //                main = 125 -------------------------------------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(125), None, None, Some(125), Some(125)]
+    );
+
+    // ----- after1 captured in compute as ValueRecord::Int ------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["after1"]),
+        vec![("after1".into(), 125)]
+    );
+}
+
+// --- events_emit_test.cdc ------------------------------------------------
+
+const EVENTS_EMIT_NDJSON: &str = include_str!("ndjson/events_emit_test.ndjson");
+
+/// Pins Cadence `event` declarations + `emit` statements.
+///
+/// Each `emit` surfaces as a tagged `CadenceEmit:<EventName>(field:
+/// value, ...)` io_event with all parameters preserved in the text
+/// payload, AND each field is captured as a typed
+/// `ValueRecord` local under the canonical
+/// `emit:<EventName>.<field>` name so the frontend can render the
+/// event with full type fidelity rather than re-parsing the string
+/// payload.
+#[test]
+fn test_events_emit_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_events_emit_test_via_ct_print_full",
+        "events_emit_test.cdc",
+        EVENTS_EMIT_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "do_transfer", "do_mint"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 7 explicit step events + 1 implicit start step = 8 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    // main, compute, do_transfer, do_mint = 4 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    // 2 emit events.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(2),
+        "io_events; counts={counts} (one CadenceEmit per emit statement)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 4 call_entry + 4 call_exit + 2 io = 18 events.
+    assert_eq!(events.len(), 18, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- IO events: tagged CadenceEmit:<Name>(...) text payload ---
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(io_events.len(), 2);
+
+    let io_summary: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            let kind = e["io_kind"].as_str().unwrap_or("?");
+            let text = e["text"].as_str().unwrap_or("?");
+            (kind, text)
+        })
+        .collect();
+    assert_eq!(
+        io_summary,
+        vec![
+            (
+                "ioStderr",
+                "CadenceEmit:Transfer(amount: 12.5, from: 0x01, to: 0x02)",
+            ),
+            (
+                "ioStderr",
+                "CadenceEmit:NFTMinted(id: 1001, metadata: {\"name\": \"Cat\", \"rarity\": \"common\"})",
+            ),
+        ],
+        "Each emit surfaces as a single tagged CadenceEmit:<Name> io \
+         event with the full field-name+value payload preserved in \
+         the text channel."
+    );
+
+    // ----- Per-field typed locals: emit:<Event>.<field> -------------
+    // Address fields surface as ValueRecord::Int (matching the M2 hex
+    // convention for i64-fitting addresses); UInt64 id surfaces as
+    // ValueRecord::Int.  We pin each via the strict
+    // `observed_int_var_sequence` helper which rejects any non-Int
+    // variant with a hard error.
+    assert_eq!(
+        observed_int_var_sequence(
+            &doc,
+            &[
+                "emit:Transfer.from",
+                "emit:Transfer.to",
+                "emit:NFTMinted.id",
+            ],
+        ),
+        vec![
+            ("emit:Transfer.from".into(), 0x01),
+            ("emit:Transfer.to".into(), 0x02),
+            ("emit:NFTMinted.id".into(), 1001),
+        ]
+    );
+
+    // ----- Transfer.amount surfaces as a typed leaf (UFix64) --------
+    // The recorder does not yet have a dedicated UFix64 path, so
+    // `12.5` falls through to the residual Raw fallback (the
+    // `value.parse::<i64>()` branch fails for a fractional decimal).
+    // This is documented in the M9 known-limitations list (Fix64 /
+    // UFix64 → ValueRecord::Float is the planned shape per the
+    // `fixed_point_test` deliverable in M10).  Pinning the exact Raw
+    // payload here so any future move to ValueRecord::Float lands
+    // visibly through this strict pin instead of silently weakening.
+    let amount = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "emit:Transfer.amount")
+        .expect("emit:Transfer.amount should be present");
+    assert_eq!(amount["value"]["kind"].as_str(), Some("Raw"));
+    assert_eq!(amount["value"]["r"].as_str(), Some("12.5"));
+
+    // ----- NFTMinted.metadata surfaces as ValueRecord::Sequence -----
+    // (Cadence dictionaries surface as Sequence-of-Tuple via the
+    // existing `{K: V}` cadence_type path.)
+    let metadata = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "emit:NFTMinted.metadata")
+        .expect("emit:NFTMinted.metadata should be present");
+    assert_eq!(metadata["value"]["kind"].as_str(), Some("Sequence"));
+    let metadata_elems = metadata["value"]["elements"]
+        .as_array()
+        .expect("metadata.elements array");
+    assert_eq!(
+        metadata_elems.len(),
+        2,
+        "metadata dict has two key/value pairs"
+    );
+    for pair in metadata_elems {
+        assert_eq!(pair["kind"].as_str(), Some("Tuple"));
+        let elements = pair["elements"].as_array().expect("tuple elements");
+        assert_eq!(elements.len(), 2, "(key, value) tuple shape");
+        assert_eq!(elements[0]["kind"].as_str(), Some("String"));
+        assert_eq!(elements[1]["kind"].as_str(), Some("String"));
+    }
+    let dict_pairs: Vec<(String, String)> = metadata_elems
+        .iter()
+        .map(|p| {
+            let k = p["elements"][0]["text"].as_str().unwrap().to_string();
+            let v = p["elements"][1]["text"].as_str().unwrap().to_string();
+            (k, v)
+        })
+        .collect();
+    // Note: dict-key parser strips outer JSON-style quotes off the
+    // key (canonical Cadence dict-key shape), but values pass
+    // through verbatim — the recorder treats values as opaque
+    // payloads so the quotes are preserved literally.  Pinning
+    // both to capture this current shape; if the value-side parser
+    // ever learns to strip JSON quotes, this strict pin will catch
+    // the change.
+    assert_eq!(
+        dict_pairs,
+        vec![
+            ("name".into(), "\"Cat\"".into()),
+            ("rarity".into(), "\"common\"".into()),
+        ]
+    );
+
+    // ----- Returns: do_transfer=Void, do_mint=Void, compute=0, main=0 -
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![None, None, Some(0), Some(0)]
+    );
+}
+
+// --- interfaces_test.cdc -------------------------------------------------
+
+const INTERFACES_NDJSON: &str = include_str!("ndjson/interfaces_test.ndjson");
+
+/// Pins Cadence resource interface + interface-restricted reference.
+///
+/// `&{Provider}` (an interface restriction set) surfaces as a typed
+/// `ValueRecord::Reference` (the existing `&...` cadence_type path
+/// catches the interface form too — the restriction-set name lives
+/// in the type-id metadata).  The dispatched `myVault.provide()`
+/// call surfaces as TWO call frames: the interface-typed
+/// `Provider.provide` dispatch and the concrete `MyVault.provide`
+/// implementation, both visible in the function table — so the
+/// frontend can render the interface dispatch independently of the
+/// concrete implementation.
+#[test]
+fn test_interfaces_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_interfaces_test_via_ct_print_full",
+        "interfaces_test.cdc",
+        INTERFACES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table: both interface and concrete frames -------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "compute",
+            "consume",
+            "Provider.provide",
+            "MyVault.provide",
+        ],
+        "Both the interface-typed `Provider.provide` and the concrete \
+         `MyVault.provide` must surface in the function table — the \
+         frontend uses the dual-frame pattern to render interface \
+         dispatch in the call trace independently of the concrete \
+         implementation.",
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 13 explicit step events + 4 implicit steps from resource_create
+    // (×2) and resource_destroy (×2) + 1 implicit start step = 18.
+    assert_eq!(counts["steps"].as_u64(), Some(18), "steps; counts={counts}");
+    // main, compute, consume, Provider.provide, MyVault.provide = 5.
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    // 4 resource lifecycle events (create + destroy of MyVault and Vault).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(4),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 18 steps + 5 call_entry + 5 call_exit + 4 io = 32 events.
+    assert_eq!(events.len(), 32, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call sequence: interface frame entered before concrete ---
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "consume".to_string(),
+            "Provider.provide".to_string(),
+            "MyVault.provide".to_string(),
+        ]
+    );
+    // LIFO exit: concrete returns first, then interface, then consume.
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "MyVault.provide".to_string(),
+            "Provider.provide".to_string(),
+            "consume".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- `restricted` surfaces as ValueRecord::Reference (mutable: false) -
+    let restricted = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "restricted")
+        .expect("restricted should be present");
+    assert_eq!(
+        restricted["value"]["kind"].as_str(),
+        Some("Reference"),
+        "interface-restricted reference must decode as \
+         ValueRecord::Reference; got {}",
+        restricted["value"]
+    );
+    assert_eq!(
+        restricted["value"]["mutable"].as_bool(),
+        Some(false),
+        "&{{Provider}} is a read-only interface-restricted reference"
+    );
+    // The dereferenced payload carries the printed form of the
+    // restriction set so the consumer can render it without
+    // re-parsing the cadence_type metadata.
+    assert_eq!(
+        restricted["value"]["dereferenced"]["kind"].as_str(),
+        Some("String")
+    );
+    assert_eq!(
+        restricted["value"]["dereferenced"]["text"].as_str(),
+        Some("&{Provider}#8001"),
+    );
+
+    // ----- The interface-arg `p` on consume's call_entry is a Ref ---
+    let p = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "p")
+        .expect("`p` arg should be present");
+    assert_eq!(p["value"]["kind"].as_str(), Some("Reference"));
+    assert_eq!(p["value"]["mutable"].as_bool(), Some(false));
+
+    // ----- Provided Vault carries owner field via @Type Struct ------
+    // The provide() return path runs the concrete and interface
+    // frames back to back; the resulting `v` local must surface as
+    // ValueRecord::Struct {Vault, 8002, alice}.
+    let v_var = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "v")
+        .expect("v should be present");
+    assert_eq!(v_var["value"]["kind"].as_str(), Some("Struct"));
+    let v_fields = v_var["value"]["field_values"]
+        .as_array()
+        .expect("Struct.field_values array");
+    assert_eq!(v_fields.len(), 3, "Vault Struct: type + uuid + owner");
+    assert_eq!(v_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(v_fields[1]["i"].as_i64(), Some(8002));
+    assert_eq!(v_fields[2]["text"].as_str(), Some("alice"));
+
+    // ----- bal and result decode as ValueRecord::Int ----------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["bal", "result"]),
+        vec![("bal".into(), 77), ("result".into(), 77)]
+    );
+
+    // ----- Returns up the stack: provide×2 = Vault Struct, then
+    //       consume=77, compute=77, main=77 -------------------------
+    // (We rely on observed_int_returns for the Int returns; the
+    // resource-typed returns are filtered out — we re-derive them
+    // directly here to pin them strictly.)
+    let returns: Vec<&serde_json::Value> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .map(|e| &e["return_value"])
+        .collect();
+    assert_eq!(returns.len(), 5);
+    // MyVault.provide return: typed Struct (Vault, 8002, alice).
+    assert_eq!(returns[0]["kind"].as_str(), Some("Struct"));
+    let r0_fields = returns[0]["field_values"].as_array().unwrap();
+    assert_eq!(r0_fields.len(), 3);
+    assert_eq!(r0_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(r0_fields[1]["i"].as_i64(), Some(8002));
+    assert_eq!(r0_fields[2]["text"].as_str(), Some("alice"));
+    // Provider.provide return: same Struct (interface dispatch
+    // re-emits the resource through the interface frame).
+    assert_eq!(returns[1]["kind"].as_str(), Some("Struct"));
+    // consume / compute / main: Int(77).
+    assert_eq!(returns[2]["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[2]["i"].as_i64(), Some(77));
+    assert_eq!(returns[3]["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[3]["i"].as_i64(), Some(77));
+    assert_eq!(returns[4]["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[4]["i"].as_i64(), Some(77));
 }

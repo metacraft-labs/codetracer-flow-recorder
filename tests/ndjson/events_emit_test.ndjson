@@ -1,0 +1,17 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"events_emit_test.cdc","line":42}
+{"type":"call","name":"compute"}
+{"type":"step","file":"events_emit_test.cdc","line":36}
+{"type":"call","name":"do_transfer"}
+{"type":"step","file":"events_emit_test.cdc","line":25}
+{"type":"emit","name":"Transfer","fields":[{"name":"amount","value":"12.5","cadence_type":"UFix64"},{"name":"from","value":"0x01","cadence_type":"Address"},{"name":"to","value":"0x02","cadence_type":"Address"}]}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"events_emit_test.cdc","line":37}
+{"type":"call","name":"do_mint"}
+{"type":"step","file":"events_emit_test.cdc","line":29}
+{"type":"emit","name":"NFTMinted","fields":[{"name":"id","value":"1001","cadence_type":"UInt64"},{"name":"metadata","value":"{\"name\": \"Cat\", \"rarity\": \"common\"}","cadence_type":"{String: String}"}]}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"events_emit_test.cdc","line":38}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"events_emit_test.cdc","line":43}
+{"type":"return","value":"0","cadence_type":"Int"}

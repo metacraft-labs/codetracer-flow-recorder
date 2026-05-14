@@ -1,0 +1,31 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":63}
+{"type":"call","name":"compute"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":44}
+{"type":"resource_create","resource_type":"Account","uuid":3001,"owner":"alice","file":"pre_post_conditions_test.cdc","line":44}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":47}
+{"type":"call","name":"deposit","args":[{"name":"amount","value":"25","cadence_type":"Int"}]}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":32}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":35}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":38}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":39}
+{"type":"return","value":"125","cadence_type":"Int"}
+{"type":"variable","name":"after1","value":"125","cadence_type":"Int"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":50}
+{"type":"call","name":"deposit","args":[{"name":"amount","value":"0","cadence_type":"Int"}]}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":32}
+{"type":"error","message":"pre-condition failed: amount must be positive","error_kind":"pre"}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":55}
+{"type":"call","name":"deposit","args":[{"name":"amount","value":"-1","cadence_type":"Int"}]}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":32}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":38}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":35}
+{"type":"error","message":"post-condition failed: balance must increase","error_kind":"post"}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":57}
+{"type":"resource_destroy","resource_type":"Account","uuid":3001,"owner":"alice","file":"pre_post_conditions_test.cdc","line":57}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":58}
+{"type":"return","value":"125","cadence_type":"Int"}
+{"type":"step","file":"pre_post_conditions_test.cdc","line":64}
+{"type":"return","value":"125","cadence_type":"Int"}
