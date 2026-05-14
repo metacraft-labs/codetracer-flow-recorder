@@ -1,0 +1,8 @@
+{"type":"call","name":"main","script":true,"access":"all"}
+{"type":"step","file":"scripts_test.cdc","line":31}
+{"type":"call","name":"MarketContract.floor_price","access":"all"}
+{"type":"step","file":"scripts_test_market.cdc","line":10}
+{"type":"return","value":"12345","cadence_type":"UInt64"}
+{"type":"variable","name":"floor","value":"12345","cadence_type":"UInt64"}
+{"type":"step","file":"scripts_test.cdc","line":32}
+{"type":"return","value":"12345","cadence_type":"UInt64"}

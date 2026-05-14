@@ -3601,3 +3601,877 @@ fn test_interfaces_test_via_ct_print_full() {
     assert_eq!(returns[4]["kind"].as_str(), Some("Int"));
     assert_eq!(returns[4]["i"].as_i64(), Some(77));
 }
+
+// --- resource_collections_test.cdc ---------------------------------------
+
+const RESOURCE_COLLECTIONS_NDJSON: &str = include_str!("ndjson/resource_collections_test.ndjson");
+
+/// Pins resources nested in arrays (`@[Vault]`), dictionaries
+/// (`@{Address: Vault}`), and optionals (`@Vault?`).
+///
+/// Each container shape decodes through the existing typed-collection
+/// path:
+///
+///   * `@[Vault]` -> `ValueRecord::Sequence` whose elements are typed
+///     `ValueRecord::Struct` resource snapshots
+///     (`{ResourceType, ResourceUuid, ResourceOwner}`).
+///   * `@{Address: Vault}` -> `Sequence` of `Tuple` (Int key + Struct
+///     value) pairs — the canonical Cadence dict shape.
+///   * `@Vault?` -> `ValueRecord::Variant { Some(Struct ...) }` when
+///     populated and `ValueRecord::Variant { None }` after the move.
+///
+/// No recorder change required — the existing array / dict / optional
+/// type-id parsers already recurse into the resource-handle path.
+#[test]
+fn test_resource_collections_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_resource_collections_test_via_ct_print_full",
+        "resource_collections_test.cdc",
+        RESOURCE_COLLECTIONS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 18 explicit step events + 5 implicit steps from resource_create
+    // (x5) + 5 implicit steps from resource_destroy (x5) + 1 implicit
+    // start step = 29 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(29), "steps; counts={counts}");
+    // main + compute = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 5 lifecycle creates + 5 lifecycle destroys = 10 io_events.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(10),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 29 steps + 2 call_entry + 2 call_exit + 10 io = 43 events.
+    assert_eq!(events.len(), 43, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec!["main".to_string(), "compute".to_string()]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec!["compute".to_string(), "main".to_string()]
+    );
+
+    // ----- @[Vault] surfaces as Sequence of typed Struct snapshots ---
+    let arr_snapshots: Vec<serde_json::Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter(|v| v["varname"] == "arr")
+        .collect();
+    assert_eq!(
+        arr_snapshots.len(),
+        4,
+        "arr snapshots: initial empty + 2 appends + 1 remove"
+    );
+    // Snapshot 0: empty.
+    assert_eq!(arr_snapshots[0]["value"]["kind"].as_str(), Some("Sequence"));
+    assert_eq!(
+        arr_snapshots[0]["value"]["elements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    // Snapshot 1: [Vault#9001/alice].
+    let s1_elems = arr_snapshots[1]["value"]["elements"].as_array().unwrap();
+    assert_eq!(s1_elems.len(), 1);
+    assert_eq!(s1_elems[0]["kind"].as_str(), Some("Struct"));
+    let s1_fields = s1_elems[0]["field_values"].as_array().unwrap();
+    assert_eq!(s1_fields.len(), 3);
+    assert_eq!(s1_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(s1_fields[1]["i"].as_i64(), Some(9001));
+    assert_eq!(s1_fields[2]["text"].as_str(), Some("alice"));
+    // Snapshot 2: [Vault#9001, Vault#9002].
+    let s2_elems = arr_snapshots[2]["value"]["elements"].as_array().unwrap();
+    assert_eq!(s2_elems.len(), 2);
+    assert_eq!(
+        s2_elems[1]["field_values"].as_array().unwrap()[1]["i"].as_i64(),
+        Some(9002)
+    );
+    // Snapshot 3: [Vault#9002] (after remove).
+    let s3_elems = arr_snapshots[3]["value"]["elements"].as_array().unwrap();
+    assert_eq!(s3_elems.len(), 1);
+    assert_eq!(
+        s3_elems[0]["field_values"].as_array().unwrap()[1]["i"].as_i64(),
+        Some(9002)
+    );
+
+    // ----- @{Address: Vault} surfaces as Sequence-of-Tuple(Int,Struct) -
+    let dict_snapshots: Vec<serde_json::Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter(|v| v["varname"] == "dict")
+        .collect();
+    assert_eq!(
+        dict_snapshots.len(),
+        4,
+        "dict snapshots: initial empty + 2 inserts + 1 remove"
+    );
+    // Snapshot 0: empty.
+    assert_eq!(dict_snapshots[0]["value"]["kind"].as_str(), Some("Sequence"));
+    assert_eq!(
+        dict_snapshots[0]["value"]["elements"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    // Snapshot 1: {0x01: Vault#9003/alice}.
+    let d1 = dict_snapshots[1]["value"]["elements"].as_array().unwrap();
+    assert_eq!(d1.len(), 1);
+    assert_eq!(d1[0]["kind"].as_str(), Some("Tuple"));
+    let d1_pair = d1[0]["elements"].as_array().unwrap();
+    assert_eq!(d1_pair.len(), 2);
+    assert_eq!(d1_pair[0]["kind"].as_str(), Some("Int"));
+    assert_eq!(d1_pair[0]["i"].as_i64(), Some(0x01));
+    assert_eq!(d1_pair[1]["kind"].as_str(), Some("Struct"));
+    let d1_struct_fields = d1_pair[1]["field_values"].as_array().unwrap();
+    assert_eq!(d1_struct_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(d1_struct_fields[1]["i"].as_i64(), Some(9003));
+    assert_eq!(d1_struct_fields[2]["text"].as_str(), Some("alice"));
+    // Snapshot 2: 2 entries (insertion-order).
+    let d2 = dict_snapshots[2]["value"]["elements"].as_array().unwrap();
+    assert_eq!(d2.len(), 2);
+    let d2_keys: Vec<i64> = d2
+        .iter()
+        .map(|t| t["elements"][0]["i"].as_i64().unwrap())
+        .collect();
+    assert_eq!(d2_keys, vec![0x01, 0x02]);
+    // Snapshot 3: only 0x02 remains after remove.
+    let d3 = dict_snapshots[3]["value"]["elements"].as_array().unwrap();
+    assert_eq!(d3.len(), 1);
+    assert_eq!(d3[0]["elements"][0]["i"].as_i64(), Some(0x02));
+    assert_eq!(
+        d3[0]["elements"][1]["field_values"].as_array().unwrap()[1]["i"].as_i64(),
+        Some(9004)
+    );
+
+    // ----- @Vault? surfaces as Variant { Some(Struct) | None } -------
+    let opt_snapshots: Vec<serde_json::Value> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter(|v| v["varname"] == "opt")
+        .collect();
+    assert_eq!(
+        opt_snapshots.len(),
+        2,
+        "opt snapshots: initial Some + post-drain None"
+    );
+    let opt0 = &opt_snapshots[0]["value"];
+    assert_eq!(opt0["kind"].as_str(), Some("Variant"));
+    assert_eq!(opt0["discriminator"].as_str(), Some("Some"));
+    assert_eq!(opt0["contents"]["kind"].as_str(), Some("Struct"));
+    let opt0_fields = opt0["contents"]["field_values"].as_array().unwrap();
+    assert_eq!(opt0_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(opt0_fields[1]["i"].as_i64(), Some(9005));
+    assert_eq!(opt0_fields[2]["text"].as_str(), Some("alice"));
+    let opt1 = &opt_snapshots[1]["value"];
+    assert_eq!(opt1["kind"].as_str(), Some("Variant"));
+    assert_eq!(opt1["discriminator"].as_str(), Some("None"));
+    assert_eq!(opt1["contents"]["kind"].as_str(), Some("None"));
+
+    // ----- Removed singletons (head, removed, drained) ---------------
+    // Each remove/drain extracts a single resource as a typed Struct.
+    let removed_singles: Vec<(String, i64, String)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "head" | "removed" | "drained") {
+                return None;
+            }
+            assert_eq!(v["value"]["kind"].as_str(), Some("Struct"));
+            let f = v["value"]["field_values"].as_array()?;
+            Some((
+                name,
+                f[1]["i"].as_i64()?,
+                f[2]["text"].as_str()?.to_string(),
+            ))
+        })
+        .collect();
+    assert_eq!(
+        removed_singles,
+        vec![
+            ("head".into(), 9001, "alice".into()),
+            ("removed".into(), 9003, "alice".into()),
+            ("drained".into(), 9005, "alice".into()),
+        ]
+    );
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- access_control_test.cdc ---------------------------------------------
+
+const ACCESS_CONTROL_NDJSON: &str = include_str!("ndjson/access_control_test.ndjson");
+
+/// Pins Cadence access-control modifiers on the call frame.
+///
+/// Each call-entry's source-declared visibility (`access(self)` /
+/// `access(contract)` / `access(account)` / `access(all)`) surfaces
+/// as a tagged `CadenceAccess:<function>:<Tag>` io_event, where
+/// `<Tag>` is `AccessSelf` / `AccessContract` / `AccessAccount` /
+/// `AccessAll`.  The recorder routes the tag through
+/// `EventLogKind::TraceLogEvent` so it survives the multi-stream
+/// writer's metadata-drop and shows up in the strict pin's
+/// `io_kind` + `text` view.  Mirrors the M9 `error_kind`
+/// (pre/post/panic) dispatch on the `Error` variant.
+///
+/// Recorder change: `TraceEvent::Call` gains an optional `access`
+/// field; when set, the recorder emits one
+/// `CadenceAccess:<fn>:<Tag>` io_event per call_entry.
+#[test]
+fn test_access_control_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_access_control_test_via_ct_print_full",
+        "access_control_test.cdc",
+        ACCESS_CONTROL_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "compute",
+            "Vault.reveal_self",
+            "Vault.reveal_contract",
+            "Vault.reveal_account",
+            "Vault.reveal_all",
+        ]
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 11 explicit step events + 1 implicit start step = 12 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
+    // main + compute + 4 reveal_* = 6 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    // 6 visibility-tag io_events (one per call_entry).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(6),
+        "io_events; counts={counts} (one CadenceAccess tag per call)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 12 steps + 6 call_entry + 6 call_exit + 6 io = 30 events.
+    assert_eq!(events.len(), 30, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "Vault.reveal_self".to_string(),
+            "Vault.reveal_contract".to_string(),
+            "Vault.reveal_account".to_string(),
+            "Vault.reveal_all".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "Vault.reveal_self".to_string(),
+            "Vault.reveal_contract".to_string(),
+            "Vault.reveal_account".to_string(),
+            "Vault.reveal_all".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Tagged CadenceAccess io_events: one per call frame --------
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    assert_eq!(io_events.len(), 6);
+
+    let access_tags: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            (
+                e["io_kind"].as_str().unwrap_or("?"),
+                e["text"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        access_tags,
+        vec![
+            ("ioStderr", "CadenceAccess:main:AccessAll"),
+            ("ioStderr", "CadenceAccess:compute:AccessAll"),
+            ("ioStderr", "CadenceAccess:Vault.reveal_self:AccessSelf"),
+            (
+                "ioStderr",
+                "CadenceAccess:Vault.reveal_contract:AccessContract",
+            ),
+            (
+                "ioStderr",
+                "CadenceAccess:Vault.reveal_account:AccessAccount",
+            ),
+            ("ioStderr", "CadenceAccess:Vault.reveal_all:AccessAll"),
+        ],
+        "Each call frame must surface its source-declared visibility \
+         tag through the CadenceAccess io_event channel — the strict \
+         pin asserts the exact (function, tag) pair in call-entry \
+         emission order."
+    );
+
+    // ----- Per-accessor return values + locals -----------------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["s", "c", "a", "p"]),
+        vec![
+            ("s".into(), 1),
+            ("c".into(), 10),
+            ("a".into(), 100),
+            ("p".into(), 1000),
+        ]
+    );
+
+    // ----- Returns: reveal_self=1, reveal_contract=10, reveal_account=100,
+    //                reveal_all=1000, compute=1111, main=1111 --------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![
+            Some(1),
+            Some(10),
+            Some(100),
+            Some(1000),
+            Some(1111),
+            Some(1111),
+        ]
+    );
+}
+
+// --- optional_chaining_test.cdc ------------------------------------------
+
+const OPTIONAL_CHAINING_NDJSON: &str = include_str!("ndjson/optional_chaining_test.ndjson");
+
+/// Pins Cadence optional chaining (`?.`) and force-unwrap (`!`).
+///
+/// Successful chains surface as `ValueRecord::Variant { Some(...) }`
+/// with the chained inner payload preserved end-to-end; a None
+/// short-circuit surfaces as `Variant { None }` (no further
+/// dispatch).  A successful force-unwrap surfaces as the typed
+/// inner `ValueRecord::Int`; a force-unwrap of `nil` surfaces as a
+/// tagged `ForceNilUnwrap:<context>` io_event distinguishable from a
+/// generic `panic` via the literal `ForceNilUnwrap:` prefix on the
+/// io-event channel.
+///
+/// Recorder change: a new `TraceEvent::ForceNilUnwrap { context }`
+/// variant routes through `EventLogKind::TraceLogEvent` with the
+/// `ForceNilUnwrap:` prefix preserved in the text payload, mirroring
+/// the M10 `ResourceOwnerChange:` tag pattern.
+#[test]
+fn test_optional_chaining_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_optional_chaining_test_via_ct_print_full",
+        "optional_chaining_test.cdc",
+        OPTIONAL_CHAINING_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // Explicit step events + implicit steps from resource_create /
+    // resource_destroy emit one step per event.  Total = 20 (incl.
+    // 1 implicit start step).
+    assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
+    // main + compute = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 6 lifecycle io_events + 1 ForceNilUnwrap = 7.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(7),
+        "io_events; counts={counts} (lifecycle + ForceNilUnwrap)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 20 steps + 2 call_entry + 2 call_exit + 7 io = 31 events.
+    assert_eq!(events.len(), 31, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec!["main".to_string(), "compute".to_string()]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec!["compute".to_string(), "main".to_string()]
+    );
+
+    // ----- chained: Variant { Some(Int 42) } -------------------------
+    let chained = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "chained")
+        .expect("chained should be present");
+    assert_eq!(chained["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(chained["value"]["discriminator"].as_str(), Some("Some"));
+    assert_eq!(chained["value"]["contents"]["kind"].as_str(), Some("Int"));
+    assert_eq!(chained["value"]["contents"]["i"].as_i64(), Some(42));
+
+    // ----- short: Variant { None } (None-short-circuit) --------------
+    let short = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "short")
+        .expect("short should be present");
+    assert_eq!(short["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(short["value"]["discriminator"].as_str(), Some("None"));
+    assert_eq!(short["value"]["contents"]["kind"].as_str(), Some("None"));
+
+    // ----- present: Variant { Some(Int 7) }; bal: Int 7 --------------
+    let present = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "present")
+        .expect("present should be present");
+    assert_eq!(present["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(present["value"]["discriminator"].as_str(), Some("Some"));
+    assert_eq!(present["value"]["contents"]["kind"].as_str(), Some("Int"));
+    assert_eq!(present["value"]["contents"]["i"].as_i64(), Some(7));
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["bal"]),
+        vec![("bal".into(), 7)]
+    );
+
+    // ----- absent: Variant { None } ----------------------------------
+    let absent = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "absent")
+        .expect("absent should be present");
+    assert_eq!(absent["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(absent["value"]["discriminator"].as_str(), Some("None"));
+
+    // ----- Tagged ForceNilUnwrap io_event distinguishes from panic ---
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    let force_nil: Vec<&str> = io_events
+        .iter()
+        .filter_map(|e| e["text"].as_str())
+        .filter(|t| t.starts_with("ForceNilUnwrap:"))
+        .collect();
+    assert_eq!(
+        force_nil,
+        vec!["ForceNilUnwrap:absent"],
+        "Force-unwrap of nil must surface as a tagged ForceNilUnwrap \
+         io_event with the unwrap-site context preserved in the text \
+         payload — distinct from the generic CadenceRuntimeError panic \
+         channel so the frontend can flag the failure mode."
+    );
+    for ev in io_events.iter().filter(|e| {
+        e["text"]
+            .as_str()
+            .is_some_and(|t| t.starts_with("ForceNilUnwrap:"))
+    }) {
+        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+    }
+
+    // ----- Returns: compute=7, main=7 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(7), Some(7)]);
+}
+
+// --- scripts_test.cdc ---------------------------------------------------
+
+const SCRIPTS_NDJSON: &str = include_str!("ndjson/scripts_test.ndjson");
+
+/// Pins the Cadence script entry point (`access(all) fun main(): X`).
+///
+/// The script form differs from a transaction form on the same
+/// `main`-named entry: the recorder must expose the script-entry
+/// boundary on the io-event channel so the strict pin can pin it
+/// independently of any contract-level `main`.  Imported-contract
+/// qualified names (`MarketContract.floor_price`) must resolve
+/// across files and surface verbatim in the function table.  The
+/// returned value carries its concrete typed `ValueRecord` variant
+/// (here: `ValueRecord::Int` from a `UInt64`).
+///
+/// Recorder change: `TraceEvent::Call` gains an optional `script`
+/// flag; when true, the recorder emits a tagged
+/// `CadenceScriptEntry:<function>` io_event after the access tag.
+#[test]
+fn test_scripts_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_scripts_test_via_ct_print_full",
+        "scripts_test.cdc",
+        SCRIPTS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table: imported-contract qualified name ----------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main", "MarketContract.floor_price"],
+        "Imported-contract qualified name must resolve verbatim — \
+         the script-form `main` plus the imported \
+         `MarketContract.floor_price` are the only two entries in the \
+         function table."
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 3 explicit step events + 1 implicit start step = 4 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
+    // main + MarketContract.floor_price = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 2 access tags (main + floor_price) + 1 script-entry tag = 3.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(3),
+        "io_events; counts={counts} (2 access + 1 script-entry)"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 4 steps + 2 call_entry + 2 call_exit + 3 io = 11 events.
+    assert_eq!(events.len(), 11, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Tagged io_events: access(main) → script-entry → access(...) -
+    let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
+    let io_summary: Vec<(&str, &str)> = io_events
+        .iter()
+        .map(|e| {
+            (
+                e["io_kind"].as_str().unwrap_or("?"),
+                e["text"].as_str().unwrap_or("?"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        io_summary,
+        vec![
+            ("ioStderr", "CadenceAccess:main:AccessAll"),
+            ("ioStderr", "CadenceScriptEntry:main"),
+            (
+                "ioStderr",
+                "CadenceAccess:MarketContract.floor_price:AccessAll",
+            ),
+        ],
+        "Script entry-point boundary surfaces as a CadenceScriptEntry: \
+         tag immediately after the access tag — the strict pin asserts \
+         the exact io_event sequence so the script form is \
+         distinguishable from a transaction `main`."
+    );
+
+    // ----- Returned UInt64 surfaces as typed ValueRecord::Int --------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["floor"]),
+        vec![("floor".into(), 12345)]
+    );
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(12345), Some(12345)],
+        "MarketContract.floor_price and main both return UInt64 12345 \
+         as a typed ValueRecord::Int"
+    );
+}
+
+// --- hash_builtins_test.cdc ---------------------------------------------
+
+const HASH_BUILTINS_NDJSON: &str = include_str!("ndjson/hash_builtins_test.ndjson");
+
+/// SHA-2/256 digest of the canonical `"abc"` test vector (32 bytes).
+const SHA2_256_ABC: [i64; 32] = [
+    0xba, 0x78, 0x16, 0xbf, 0x8f, 0x01, 0xcf, 0xea, 0x41, 0x41, 0x40, 0xde, 0x5d, 0xae, 0x22, 0x23,
+    0xb0, 0x03, 0x61, 0xa3, 0x96, 0x17, 0x7a, 0x9c, 0xb4, 0x10, 0xff, 0x61, 0xf2, 0x00, 0x15, 0xad,
+];
+
+/// SHA-3/256 digest of the canonical `"abc"` test vector (32 bytes).
+const SHA3_256_ABC: [i64; 32] = [
+    0x3a, 0x98, 0x5d, 0xa7, 0x4f, 0xe2, 0x25, 0xb2, 0x04, 0x5c, 0x17, 0x2d, 0x6b, 0xd3, 0x90, 0xbd,
+    0x85, 0x5f, 0x08, 0x6e, 0x3e, 0x9d, 0x52, 0x5b, 0x46, 0xbf, 0xe2, 0x45, 0x11, 0x43, 0x15, 0x32,
+];
+
+/// Pins Cadence hash builtins (`HashAlgorithm.SHA2_256.hash` /
+/// `HashAlgorithm.SHA3_256.hash`).
+///
+/// Each `hash` call surfaces as a Call/Return pair where:
+///
+///   * The input bytes argument decodes as
+///     `ValueRecord::Sequence<UInt8>` — one `ValueRecord::Int`
+///     element per byte, with `i in 0..=255`.
+///   * The return digest decodes as `ValueRecord::Sequence<UInt8>`
+///     of length 32 (algorithm-specific) with the exact published
+///     test-vector bytes.
+///
+/// No recorder change required — the `[UInt8]` cadence_type already
+/// recurses through the `[T]` array parser into per-byte
+/// `ValueRecord::Int` leaves, both for the call's typed args buffer
+/// and for the typed return value.
+#[test]
+fn test_hash_builtins_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_hash_builtins_test_via_ct_print_full",
+        "hash_builtins_test.cdc",
+        HASH_BUILTINS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "compute",
+            "HashAlgorithm.SHA2_256.hash",
+            "HashAlgorithm.SHA3_256.hash",
+        ]
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 6 explicit step events + 1 implicit start step = 7 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
+    // main + compute + 2 hash calls = 4 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    // No io_events (hash builtins do not route through any tagged
+    // io channel).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 7 steps + 4 call_entry + 4 call_exit + 0 io = 15 events.
+    assert_eq!(events.len(), 15, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "HashAlgorithm.SHA2_256.hash".to_string(),
+            "HashAlgorithm.SHA3_256.hash".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "HashAlgorithm.SHA2_256.hash".to_string(),
+            "HashAlgorithm.SHA3_256.hash".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Input bytes [97, 98, 99] surface as Sequence<Int> ---------
+    let bytes_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "bytes")
+        .expect("bytes local should be present");
+    assert_eq!(bytes_var["value"]["kind"].as_str(), Some("Sequence"));
+    let bytes_elems = bytes_var["value"]["elements"].as_array().unwrap();
+    let bytes_int: Vec<i64> = bytes_elems
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(bytes_int, vec![97, 98, 99]);
+
+    // ----- Per-call input arg `data` surfaces as Sequence<Int> -------
+    // Both hash calls receive the same `[97, 98, 99]` byte sequence.
+    let call_arg_data: Vec<Vec<i64>> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_entry")
+        .filter(|e| {
+            e["function"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("HashAlgorithm.")
+        })
+        .map(|e| {
+            let args = e["args"].as_array().expect("args array");
+            assert_eq!(args.len(), 1);
+            assert_eq!(args[0]["varname"].as_str(), Some("data"));
+            assert_eq!(args[0]["value"]["kind"].as_str(), Some("Sequence"));
+            args[0]["value"]["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    assert_eq!(e["kind"].as_str(), Some("Int"));
+                    e["i"].as_i64().unwrap()
+                })
+                .collect::<Vec<i64>>()
+        })
+        .collect();
+    assert_eq!(
+        call_arg_data,
+        vec![vec![97, 98, 99], vec![97, 98, 99]],
+        "Both SHA2_256.hash and SHA3_256.hash receive the same \
+         3-byte `data` argument as a typed Sequence<UInt8>."
+    );
+
+    // ----- Per-call return digest matches published test vector ------
+    let returns: Vec<Vec<i64>> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .filter(|e| {
+            e["function"]
+                .as_str()
+                .unwrap_or("")
+                .starts_with("HashAlgorithm.")
+        })
+        .map(|e| {
+            let rv = &e["return_value"];
+            assert_eq!(rv["kind"].as_str(), Some("Sequence"));
+            rv["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    assert_eq!(e["kind"].as_str(), Some("Int"));
+                    e["i"].as_i64().unwrap()
+                })
+                .collect::<Vec<i64>>()
+        })
+        .collect();
+    assert_eq!(returns.len(), 2);
+    assert_eq!(returns[0].len(), 32, "SHA-2/256 digest is 32 bytes");
+    assert_eq!(returns[1].len(), 32, "SHA-3/256 digest is 32 bytes");
+    assert_eq!(
+        returns[0],
+        SHA2_256_ABC.to_vec(),
+        "SHA-2/256(\"abc\") test vector mismatch"
+    );
+    assert_eq!(
+        returns[1],
+        SHA3_256_ABC.to_vec(),
+        "SHA-3/256(\"abc\") test vector mismatch"
+    );
+
+    // ----- Locals d2/d3 carry the same digest payload ----------------
+    let digest_locals: Vec<(String, Vec<i64>)> = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "d2" | "d3") {
+                return None;
+            }
+            assert_eq!(v["value"]["kind"].as_str(), Some("Sequence"));
+            let bytes: Vec<i64> = v["value"]["elements"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|e| {
+                    assert_eq!(e["kind"].as_str(), Some("Int"));
+                    e["i"].as_i64().unwrap()
+                })
+                .collect();
+            Some((name, bytes))
+        })
+        .collect();
+    assert_eq!(digest_locals.len(), 2);
+    assert_eq!(digest_locals[0].0, "d2");
+    assert_eq!(digest_locals[0].1, SHA2_256_ABC.to_vec());
+    assert_eq!(digest_locals[1].0, "d3");
+    assert_eq!(digest_locals[1].1, SHA3_256_ABC.to_vec());
+
+    // ----- Outer compute=244, main=244 (sum of first byte of each
+    //       digest, 0xba + 0x3a = 0xf4) -------------------------------
+    let outer_returns: Vec<i64> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .filter(|e| {
+            let f = e["function"].as_str().unwrap_or("");
+            f == "compute" || f == "main"
+        })
+        .map(|e| {
+            let rv = &e["return_value"];
+            assert_eq!(
+                rv["kind"].as_str(),
+                Some("Int"),
+                "compute/main return UInt64 should decode as Int; got {rv}"
+            );
+            rv["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        outer_returns,
+        vec![244, 244],
+        "compute and main both return UInt64 244 = 0xba + 0x3a (the \
+         first byte of each digest)."
+    );
+}
