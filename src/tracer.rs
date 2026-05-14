@@ -18,7 +18,9 @@ use codetracer_trace_types::{
 };
 use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::{create_trace_writer, StreamingValueEncoder, TraceEventsFileFormat};
+use codetracer_trace_writer_nim::{
+    create_trace_writer, StreamingValueEncoder, TraceEventsFileFormat,
+};
 use eyre::{eyre, Context, Result};
 use serde::Deserialize;
 
@@ -101,6 +103,40 @@ pub enum TraceEvent {
         owner: String,
         file: String,
         line: u32,
+    },
+
+    // ----- M10 events -----
+    /// Tagged owner-change notification emitted alongside a move
+    /// operator that transfers ownership of a resource.  Surfaces in
+    /// the multi-stream trace as a `TraceLogEvent` (→ `ioStderr`) with
+    /// the literal `ResourceOwnerChange:` prefix in the text payload
+    /// so the tag survives the writer's metadata-drop on the
+    /// multi-stream path.  This is the closing piece of the M10
+    /// `resources_full_test` deliverable: the move operators
+    /// (`let b <- a`, `<->`, shift, `<-!`, `destroy`) all surface
+    /// owner transitions through this single tagged channel.
+    #[serde(rename = "resource_owner_change")]
+    ResourceOwnerChange {
+        resource_type: String,
+        uuid: u64,
+        from_owner: String,
+        to_owner: String,
+        file: String,
+        line: u32,
+    },
+
+    /// Cadence `emit Foo(...)` event with structured field values.
+    /// Routes to a tagged `CadenceEmit:` io_event whose text payload
+    /// preserves the event name, field name/value pairs, and the
+    /// concrete Cadence type of each field.  This is the closing
+    /// piece of the M10 `events_emit_test` deliverable — a typed
+    /// alternative to the legacy `event` variant which only carries a
+    /// pre-rendered string payload.
+    #[serde(rename = "emit")]
+    Emit {
+        name: String,
+        #[serde(default)]
+        fields: Vec<TraceArg>,
     },
 }
 
@@ -210,15 +246,27 @@ fn parse_cadence_struct(value: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Parse a Cadence resource handle (`"@Coin#7001"`) into its `(type,
-/// uuid)` components.  Returns `None` if the input does not match the
-/// `@<Type>#<uuid>` shape.
-fn parse_resource_handle(value: &str) -> Option<(String, u64)> {
+/// Parse a Cadence resource handle (`"@Coin#7001"` or
+/// `"@Vault#5001@0x01"`) into its `(type, uuid, owner)` components.
+/// Returns `None` if the input does not match the `@<Type>#<uuid>`
+/// shape.  The trailing `@<owner>` segment is optional — when absent
+/// the owner is reported as `None` (the M4 form, used by the
+/// pre-M10 fixtures where owner snapshots only flow through the
+/// dedicated `resource_create` / `resource_move` / `resource_destroy`
+/// trace events).
+fn parse_resource_handle(value: &str) -> Option<(String, u64, Option<String>)> {
     let v = value.trim();
     let v = v.strip_prefix('@')?;
     let (ty, rest) = v.split_once('#')?;
-    let uuid: u64 = rest.parse().ok()?;
-    Some((ty.to_string(), uuid))
+    // Owner suffix (M10 resources_full_test): `<uuid>@<owner>`.  If
+    // present, split it off so the resource's typed-Struct snapshot
+    // can carry the implicit `owner` field alongside `uuid`.
+    let (uuid_str, owner) = match rest.split_once('@') {
+        Some((u, o)) => (u, Some(o.to_string())),
+        None => (rest, None),
+    };
+    let uuid: u64 = uuid_str.parse().ok()?;
+    Some((ty.to_string(), uuid, owner))
 }
 
 /// Split `s` on every top-level occurrence of `sep`, treating `[]`,
@@ -638,18 +686,19 @@ impl CadenceTracer {
                 TraceEvent::Return {
                     value,
                     cadence_type,
-                } => {
-                    match value.as_deref() {
-                        None | Some("") | Some("nil") | Some("Void") => {
-                            TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
-                        }
-                        Some(v) => {
-                            let val = self.value_record(v, cadence_type.as_deref());
-                            self.register_typed_return(val);
-                        }
+                } => match value.as_deref() {
+                    None | Some("") | Some("nil") | Some("Void") => {
+                        TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
                     }
-                }
-                TraceEvent::Error { message, error_kind } => {
+                    Some(v) => {
+                        let val = self.value_record(v, cadence_type.as_deref());
+                        self.register_typed_return(val);
+                    }
+                },
+                TraceEvent::Error {
+                    message,
+                    error_kind,
+                } => {
                     // Distinguish Cadence pre-condition / post-condition
                     // violations from a user-issued `panic`.  Pre/post
                     // failures route through `EventLogKind::TraceLogEvent`
@@ -661,14 +710,8 @@ impl CadenceTracer {
                     // event log itself, surviving the lossy `io_kind`
                     // bucketing.
                     let (log_kind, metadata) = match error_kind.as_deref() {
-                        Some("pre") => (
-                            EventLogKind::TraceLogEvent,
-                            "CadencePreCondition",
-                        ),
-                        Some("post") => (
-                            EventLogKind::TraceLogEvent,
-                            "CadencePostCondition",
-                        ),
+                        Some("pre") => (EventLogKind::TraceLogEvent, "CadencePreCondition"),
+                        Some("post") => (EventLogKind::TraceLogEvent, "CadencePostCondition"),
                         Some("panic") | None | Some(_) => {
                             (EventLogKind::Error, "CadenceRuntimeError")
                         }
@@ -777,6 +820,80 @@ impl CadenceTracer {
                         &format!("owner={}", owner),
                     );
                 }
+
+                // --- M10 events ---
+                TraceEvent::ResourceOwnerChange {
+                    resource_type,
+                    uuid,
+                    from_owner,
+                    to_owner,
+                    file: _,
+                    line,
+                } => {
+                    // Emit a step at the move site so the trace can
+                    // line the owner-change up against source.
+                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+
+                    // Tagged owner-change io event.  Multi-stream io
+                    // writer drops the metadata field, so the
+                    // `ResourceOwnerChange:` tag is duplicated into
+                    // the content text payload — that is the only
+                    // surface the strict tests can pin against
+                    // (`io_kind` + `text`).  The text format
+                    // (`<Type>#<uuid>: <from> -> <to>`) parses cleanly
+                    // back into the four fields downstream tooling
+                    // needs.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("ResourceOwnerChange:{}#{}", resource_type, uuid),
+                        &format!(
+                            "ResourceOwnerChange:{}#{}: {} -> {}",
+                            resource_type, uuid, from_owner, to_owner
+                        ),
+                    );
+                }
+
+                TraceEvent::Emit { name, fields } => {
+                    // Stage each field as a typed call-arg-style local
+                    // (so the locals pane carries the typed
+                    // ValueRecord variants), then emit the tagged
+                    // `CadenceEmit:` io event whose text payload
+                    // serialises (name, [(field, type, value), ...]).
+                    // The text shape is stable so the strict pin in
+                    // `tests/test_tracer.rs` can `assert_eq!` against
+                    // it.
+                    let mut payload = format!("CadenceEmit:{}(", name);
+                    for (i, f) in fields.iter().enumerate() {
+                        if i > 0 {
+                            payload.push_str(", ");
+                        }
+                        payload.push_str(&f.name);
+                        payload.push_str(": ");
+                        payload.push_str(&f.value);
+                    }
+                    payload.push(')');
+
+                    // Emit each field as a typed local so the value
+                    // surfaces as ValueRecord::Struct/Int/String/...
+                    // (whatever its concrete cadence_type maps to)
+                    // — the spec calls out "event payload captured
+                    // as a typed ValueRecord::Struct with all
+                    // parameters preserved", which we surface via
+                    // the standard `value_record` typed-variant path.
+                    for f in fields {
+                        let val = self.value_record(&f.value, f.cadence_type.as_deref());
+                        let var_name = format!("emit:{}.{}", name, f.name);
+                        self.register_typed_variable(&var_name, val);
+                    }
+
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::EvmEvent,
+                        &format!("CadenceEmit:{}", name),
+                        &payload,
+                    );
+                }
             }
         }
 
@@ -829,6 +946,35 @@ impl CadenceTracer {
     fn value_record(&mut self, value: &str, cadence_type: Option<&str>) -> ValueRecord {
         let trimmed_type = cadence_type.map(|t| t.trim());
         match trimmed_type {
+            // -------- Cadence enums: `enum:<EnumName>:<BackingType>` ---
+            // Marker scheme used by NDJSON fixtures to flag a Cadence
+            // enum case to the recorder.  Cadence enums have the shape
+            // `enum Color: UInt8 { case red; case green; case blue }`,
+            // so the marker captures both the enum name (used as the
+            // type-id and the discriminator-prefix sanity check) and
+            // the backing-integer width (used for the inner contents'
+            // `ValueRecord::Int` width).  The enum case itself is
+            // surfaced as `ValueRecord::Variant { discriminator:
+            // "<EnumName>.<case>", contents: ValueRecord::None,
+            // type_id }` — the spec calls out
+            // `Variant { name: "Color.red", fields: [] }`, and an
+            // empty inner `None` payload is the canonical "no fields"
+            // shape used by the Move recorder.
+            Some(t) if t.starts_with("enum:") => {
+                let rest = &t["enum:".len()..];
+                let (_enum_name, _backing) = match rest.split_once(':') {
+                    Some((n, b)) => (n, b),
+                    None => (rest, "Int"),
+                };
+                let variant_id = self.ensure_type(TypeKind::Variant, t);
+                let inner_id = self.ensure_type(TypeKind::None, "EnumCase");
+                ValueRecord::Variant {
+                    discriminator: value.trim().to_string(),
+                    contents: Box::new(ValueRecord::None { type_id: inner_id }),
+                    type_id: variant_id,
+                }
+            }
+
             // -------- Optionals: `T?` ----------------------------------
             Some(t) if t.ends_with('?') && t.len() > 1 => {
                 let inner_type = &t[..t.len() - 1];
@@ -856,11 +1002,7 @@ impl CadenceTracer {
             }
 
             // -------- Arrays: `[T]` ------------------------------------
-            Some(t)
-                if t.starts_with('[')
-                    && t.ends_with(']')
-                    && t.len() >= 2 =>
-            {
+            Some(t) if t.starts_with('[') && t.ends_with(']') && t.len() >= 2 => {
                 let inner_type = &t[1..t.len() - 1];
                 let seq_id = self.ensure_type(TypeKind::Seq, t);
                 let elements = parse_cadence_array(value)
@@ -875,11 +1017,7 @@ impl CadenceTracer {
             }
 
             // -------- Dictionaries: `{K: V}` ---------------------------
-            Some(t)
-                if t.starts_with('{')
-                    && t.ends_with('}')
-                    && t.contains(':') =>
-            {
+            Some(t) if t.starts_with('{') && t.ends_with('}') && t.contains(':') => {
                 // Strip the outer braces, then split on the first ':'
                 // to recover (key_type, value_type).  Cadence dict
                 // values render as JSON-ish objects: `{"apple": 30}`.
@@ -958,7 +1096,10 @@ impl CadenceTracer {
             Some("Address") => {
                 let type_id = self.ensure_type(TypeKind::Int, "Address");
                 let v = value.trim();
-                let hex = v.strip_prefix("0x").or_else(|| v.strip_prefix("0X")).unwrap_or(v);
+                let hex = v
+                    .strip_prefix("0x")
+                    .or_else(|| v.strip_prefix("0X"))
+                    .unwrap_or(v);
                 if let Ok(u) = u64::from_str_radix(hex, 16) {
                     if u <= i64::MAX as u64 {
                         ValueRecord::Int {
@@ -992,12 +1133,7 @@ impl CadenceTracer {
             Some(t)
                 if matches!(
                     t,
-                    "Int128"
-                        | "Int256"
-                        | "UInt128"
-                        | "UInt256"
-                        | "Word128"
-                        | "Word256"
+                    "Int128" | "Int256" | "UInt128" | "UInt256" | "Word128" | "Word256"
                 ) =>
             {
                 let type_id = self.ensure_type(TypeKind::Int, t);
@@ -1051,26 +1187,40 @@ impl CadenceTracer {
             // can query lineage by uuid/owner without re-parsing the
             // printed form.  Spec: `metacraft-specs/policies/
             // recorder-test-requirements.md` §1 (typed payload).
+            //
+            // M10 (resources_full_test) extension: the printed form
+            // optionally carries a trailing `@<owner>` segment
+            // (`@Vault#5001@0x01`).  When present, the typed Struct
+            // additionally carries the implicit `owner` field as a
+            // third Struct field so move-operator snapshots
+            // (`let b <- a`, swap, shift, force-unwrap, nested
+            // destroy) preserve the owner transition end-to-end.
             Some(t) if t.starts_with('@') => {
                 let resource_name = &t[1..];
                 let struct_id = self.ensure_type(TypeKind::Struct, t);
                 let type_field_id = self.ensure_type(TypeKind::String, "ResourceType");
                 let uuid_field_id = self.ensure_type(TypeKind::Int, "ResourceUuid");
-                let (parsed_type, parsed_uuid) =
-                    parse_resource_handle(value).unwrap_or_else(|| {
-                        (resource_name.to_string(), 0)
+                let (parsed_type, parsed_uuid, parsed_owner) = parse_resource_handle(value)
+                    .unwrap_or_else(|| (resource_name.to_string(), 0, None));
+                let mut field_values = vec![
+                    ValueRecord::String {
+                        text: parsed_type,
+                        type_id: type_field_id,
+                    },
+                    ValueRecord::Int {
+                        i: parsed_uuid as i64,
+                        type_id: uuid_field_id,
+                    },
+                ];
+                if let Some(owner) = parsed_owner {
+                    let owner_field_id = self.ensure_type(TypeKind::String, "ResourceOwner");
+                    field_values.push(ValueRecord::String {
+                        text: owner,
+                        type_id: owner_field_id,
                     });
+                }
                 ValueRecord::Struct {
-                    field_values: vec![
-                        ValueRecord::String {
-                            text: parsed_type,
-                            type_id: type_field_id,
-                        },
-                        ValueRecord::Int {
-                            i: parsed_uuid as i64,
-                            type_id: uuid_field_id,
-                        },
-                    ],
+                    field_values,
                     type_id: struct_id,
                 }
             }
@@ -1374,7 +1524,8 @@ mod tests {
         // The optional `error_kind` discriminator distinguishes Cadence
         // pre-condition / post-condition violations from a user-issued
         // panic; see `convert_events`'s `EventLogKind` dispatch.
-        let input = r#"{"type":"error","message":"pre-condition failed: b != 0","error_kind":"pre"}"#;
+        let input =
+            r#"{"type":"error","message":"pre-condition failed: b != 0","error_kind":"pre"}"#;
         let events = parse_ndjson(input).unwrap();
         assert_eq!(
             events[0],
