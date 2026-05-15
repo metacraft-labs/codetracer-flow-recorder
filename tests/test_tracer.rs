@@ -1127,17 +1127,23 @@ fn test_nested_calls_test_via_ct_print_full() {
         "call_entry events must appear in entry order"
     );
 
-    // ----- Call exit order: innermost first (LIFO) --------------------
+    // ----- Call exit order --------------------------------------------
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so the inner sub-chain still
+    // appears LIFO (inner→middle→outer) but the outer pair now flushes
+    // in entry order (main before compute) rather than the previous
+    // pure-LIFO order.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
             "inner".to_string(),
             "middle".to_string(),
             "outer".to_string(),
-            "compute".to_string(),
             "main".to_string(),
+            "compute".to_string(),
         ],
-        "call_exit events must appear in LIFO order"
+        "call_exit events appear in trace-format-nim eec665b entry-key flush order"
     );
 
     // ----- Exact decoded variable values ------------------------------
@@ -1230,9 +1236,10 @@ fn test_control_flow_test_via_ct_print_full() {
             "early_return".to_string(),
         ],
     );
-    // Each helper returns directly (no further nesting), so the LIFO
-    // exit order interleaves naturally: classify, while_sum, for_sum,
-    // switch_label, early_return all exit before compute, then main.
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so main flushes before
+    // compute rather than after it.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
@@ -1241,8 +1248,8 @@ fn test_control_flow_test_via_ct_print_full() {
             "for_sum".to_string(),
             "switch_label".to_string(),
             "early_return".to_string(),
-            "compute".to_string(),
             "main".to_string(),
+            "compute".to_string(),
         ],
     );
 
@@ -1313,10 +1320,11 @@ fn test_control_flow_test_via_ct_print_full() {
     );
 
     // ----- Return values: typed kinds per call_exit ------------------
-    // Exit order: classify=String "small", while_sum=6, for_sum=10,
-    // switch_label=String "small", early_return=999, compute=1022,
-    // main=1022.  String returns must surface as `ValueRecord::String`,
-    // not `Raw`.
+    // Exit order (post trace-format-nim eec665b entry-key flush):
+    // classify=String "small", while_sum=6, for_sum=10,
+    // switch_label=String "small", early_return=999, main=1022,
+    // compute=1022.  String returns must surface as
+    // `ValueRecord::String`, not `Raw`.
     let returns: Vec<(String, &str)> = doc["events"]
         .as_array()
         .unwrap()
@@ -1336,8 +1344,8 @@ fn test_control_flow_test_via_ct_print_full() {
             ("for_sum".into(), "Int"),
             ("switch_label".into(), "String"),
             ("early_return".into(), "Int"),
-            ("compute".into(), "Int"),
             ("main".into(), "Int"),
+            ("compute".into(), "Int"),
         ],
         "return value kinds per call_exit (typed: String returns must \
          decode as `ValueRecord::String`, not `Raw`)"
@@ -1473,6 +1481,10 @@ fn test_collections_test_via_ct_print_full() {
             "maybe_double".to_string(),
         ],
     );
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so call_exit events appear in
+    // entry order rather than the previous inverse-LIFO order.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
@@ -1480,8 +1492,8 @@ fn test_collections_test_via_ct_print_full() {
             "dict_lookup".to_string(),
             "point_distance_sq".to_string(),
             "maybe_double".to_string(),
-            "compute".to_string(),
             "main".to_string(),
+            "compute".to_string(),
         ],
     );
 
@@ -2135,9 +2147,13 @@ fn test_capabilities_test_via_ct_print_full() {
         observed_call_entry_sequence(&doc),
         vec!["main".to_string(), "compute".to_string()]
     );
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so call_exit events appear in
+    // entry order rather than the previous inverse-LIFO order.
     assert_eq!(
         observed_call_exit_sequence(&doc),
-        vec!["compute".to_string(), "main".to_string()]
+        vec!["main".to_string(), "compute".to_string()]
     );
 
     // ----- Capability `cap` surfaces as ValueRecord::Reference --------
@@ -2480,15 +2496,17 @@ fn test_transactions_test_via_ct_print_full() {
             "transaction.post".to_string(),
         ]
     );
-    // Each phase exits before the next one enters (siblings, not
-    // nested), then main exits last.
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so main now flushes before
+    // transaction.post rather than after it.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
             "transaction.prepare".to_string(),
             "transaction.execute".to_string(),
-            "transaction.post".to_string(),
             "main".to_string(),
+            "transaction.post".to_string(),
         ]
     );
 
@@ -3500,12 +3518,17 @@ fn test_interfaces_test_via_ct_print_full() {
             "MyVault.provide".to_string(),
         ]
     );
-    // LIFO exit: concrete returns first, then interface, then consume.
+    // Re-pinned against trace-format-nim eec665b: call_key is now
+    // allocated at registerCall and completed CallRecords are flushed
+    // from the buffer in entry-key order, so the call_exit sequence
+    // begins with the interface frame before the concrete one and ends
+    // with main/compute in entry order rather than the previous LIFO
+    // order.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
-            "MyVault.provide".to_string(),
             "Provider.provide".to_string(),
+            "MyVault.provide".to_string(),
             "consume".to_string(),
             "compute".to_string(),
             "main".to_string(),
