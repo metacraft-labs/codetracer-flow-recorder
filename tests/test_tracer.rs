@@ -748,12 +748,17 @@ fn test_go_helper_cli_record() {
 // hard error message asking the test author to extend the test rather
 // than weaken the assertion.
 //
-// Where the recorder's current behaviour deviates from what the
-// language semantics dictate (e.g. arrays/dicts/structs serialised as
-// `Raw` strings instead of `Sequence`/`HashMap`/`Struct` ValueRecord
-// variants), the deviation is documented inline as `RECORDER BUG: ...`
-// and a parallel `#[ignore]`d sibling test captures the spec-correct
-// expectation so it surfaces the moment the recorder catches up.
+// Historical note: earlier revisions of this file carried inline
+// `RECORDER BUG: ...` markers wherever the recorder's behaviour
+// deviated from what Cadence semantics dictate (e.g. arrays/dicts/
+// structs surfacing as `Raw` strings instead of typed
+// `Sequence`/`HashMap`/`Struct` `ValueRecord` variants).  Those
+// deviations have all been closed: every typed Cadence value now
+// surfaces as its dedicated `ValueRecord` variant, including for
+// payloads that reach the recorder without a `cadence_type`
+// discriminator (the `_` arm of `value_record` recognises bare
+// `[...]` array and `{...}` dict literal shapes from the value text
+// alone).  The strict pins below assert the spec-compliant shape.
 
 /// Skip-helper: returns `Some(path)` to ct-print or logs a clear
 /// `SKIP:` diagnostic and returns `None`.  The
@@ -935,9 +940,12 @@ fn observed_raw_var_sequence(doc: &serde_json::Value, raw_only: &[&str]) -> Vec<
             assert_eq!(
                 value["kind"].as_str(),
                 Some("Raw"),
-                "variable `{}` should decode as Raw today (RECORDER BUG: \
-                 should be String/Sequence/HashMap/Struct/Variant once \
-                 typed encoding lands), got {}",
+                "variable `{}` should decode as Raw — Raw is the residual \
+                 fallback for Cadence values without a dedicated typed \
+                 encoding (e.g. Int128/Address scalars outside the \
+                 i64-fits set).  If a typed variant has since landed for \
+                 this value's type, switch to the matching helper rather \
+                 than weakening this check; got {}",
                 name,
                 value
             );
@@ -1239,9 +1247,10 @@ fn test_control_flow_test_via_ct_print_full() {
     );
 
     // ----- Exact decoded Int values -----------------------------------
-    // Only the integer variables — string variables (sign_label,
-    // switch_result) are checked separately below as `Raw` per the
-    // RECORDER BUG note.
+    // Only the integer variables.  String variables (sign_label,
+    // switch_result) are pinned separately below as typed
+    // `ValueRecord::String { text }` — the post-typed-encoding shape
+    // for Cadence String values.
     //
     // Sequence in source/event order:
     //   raw=7
@@ -1397,13 +1406,15 @@ const COLLECTIONS_NDJSON: &str = include_str!("ndjson/collections_test.ndjson");
 /// **exact** event shape.  Exercises arrays, dictionaries, structs,
 /// and optionals.
 ///
-/// RECORDER BUG: array literals (`[1, 2, 3, 4]`), dict literals
-/// (`{"apple": 30, ...}`), struct construction (`Point(x:3, y:4)`),
-/// and Optional Int values are all serialised by the recorder as
-/// stringified text and decoded by ct-print as `Raw`, not as the
-/// spec-compliant `Sequence` / `HashMap` / `Struct` / `Variant`
-/// ValueRecord variants.  The `#[ignore]`d sibling test captures the
-/// spec-compliant expectation.
+/// All compound forms now surface as their dedicated typed
+/// `ValueRecord` variants — array literals (`[1, 2, 3, 4]`) as
+/// `Sequence`, dict literals (`{"apple": 30, ...}`) as a `Sequence`
+/// of `Tuple { key, value }` pairs, struct construction
+/// (`Point(x:3, y:4)`) as `Struct { field_values }`, and Optional
+/// Int values as `Variant { Some|None }`.  The strict pins below
+/// assert the typed shape end-to-end (see also the
+/// `_value_kinds_present` sibling test that scans for the
+/// `Sequence` / `Struct` / `Variant` variant tags).
 #[test]
 fn test_collections_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -1856,12 +1867,13 @@ const RESOURCE_CAPABILITY_NDJSON: &str = include_str!("ndjson/resource_capabilit
 /// surfaces resource lifecycle events through the special-event log
 /// (`EventLogKind::TraceLogEvent` → `ioStderr` in `ct-print --full`).
 ///
-/// RECORDER BUG: resource arguments to functions (e.g. the `coin: @Coin`
-/// parameter on `Vault.deposit`) are encoded as plain strings rather
-/// than as a typed Resource ValueRecord variant — they show up as
-/// `kind: "String"` on the call_entry side and `kind: "Raw"` inside
-/// the function body.  A future typed encoding for `@Coin#7001` would
-/// make resource lineage trivially queryable.
+/// Resource arguments to functions (e.g. the `coin: @Coin` parameter
+/// on `Vault.deposit`) decode as a typed
+/// `ValueRecord::Struct { field_values: [String "Coin", Int 7001] }`
+/// — the `@Type` arm of `value_record` parses the printed
+/// `@<Type>#<uuid>` form into a (resource_type, uuid) pair so
+/// resource lineage is queryable end-to-end.  The strict pin further
+/// down the test asserts every layer of that typed shape.
 #[test]
 fn test_resource_capability_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -1881,11 +1893,15 @@ fn test_resource_capability_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    // RECORDER BUG: the spec-compliant function table would also
-    // include `init` for Coin, Vault, and the implicit getter for
-    // `vault.balance`, but the NDJSON path only registers functions
-    // that produce an explicit `call` event.  Pinning what's emitted
-    // today.
+    // The function table lists every function that surfaces an
+    // explicit `call` NDJSON event — `main`, `compute`, and the
+    // resource-method `Vault.deposit`.  Implicit Cadence members
+    // (`Coin.init`, `Vault.init`, the synthesised getter for
+    // `vault.balance`) do not produce `call` events in the helper's
+    // NDJSON output and so do not appear here; their effects are
+    // observable through the `resource_create` / `resource_destroy`
+    // and `variable` event channels respectively.  The strict pin
+    // below asserts the exact emitted set.
     assert_eq!(functions, vec!["main", "compute", "deposit"]);
 
     // ----- counts -----------------------------------------------------
