@@ -1037,6 +1037,26 @@ impl CadenceTracer {
                     // Emit a step at the resource creation site.
                     TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
 
+                    // Synthesise the implicit `<Type>.init` Cadence
+                    // initializer in the function table so the function
+                    // symbol surfaces alongside the explicit `call`
+                    // entries.  Cadence resource creation always
+                    // dispatches through the type's `init` member, but
+                    // the helper-side NDJSON does not emit a `call`
+                    // event for it (the `resource_create` channel is
+                    // the lifecycle marker).  Registering the function
+                    // name only — without a synthesised `call_entry` /
+                    // `call_exit` — keeps the calls / event counts
+                    // intact and matches how the Move 1.46 recorder
+                    // surfaces compiler-generated members.
+                    let init_fn_name = format!("{}.init", resource_type);
+                    let _ = TraceWriter::ensure_function_id(
+                        &mut *self.writer,
+                        &init_fn_name,
+                        source_path,
+                        Line(*line as i64),
+                    );
+
                     // Emit the resource as a variable with special naming convention.
                     // Variable form survives in the locals pane.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
