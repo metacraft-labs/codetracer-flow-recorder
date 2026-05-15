@@ -1,0 +1,13 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"byte_arrays_test.cdc","line":31}
+{"type":"call","name":"compute"}
+{"type":"step","file":"byte_arrays_test.cdc","line":24}
+{"type":"variable","name":"bytes","value":"[222, 173, 190, 239]","cadence_type":"[UInt8]"}
+{"type":"step","file":"byte_arrays_test.cdc","line":25}
+{"type":"variable","name":"first","value":"222","cadence_type":"UInt8"}
+{"type":"step","file":"byte_arrays_test.cdc","line":26}
+{"type":"variable","name":"n","value":"4","cadence_type":"Int"}
+{"type":"step","file":"byte_arrays_test.cdc","line":27}
+{"type":"return","value":"4","cadence_type":"Int"}
+{"type":"step","file":"byte_arrays_test.cdc","line":32}
+{"type":"return","value":"4","cadence_type":"Int"}

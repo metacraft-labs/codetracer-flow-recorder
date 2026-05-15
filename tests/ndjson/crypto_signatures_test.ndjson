@@ -1,0 +1,13 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"crypto_signatures_test.cdc","line":40}
+{"type":"call","name":"compute"}
+{"type":"step","file":"crypto_signatures_test.cdc","line":26}
+{"type":"variable","name":"pk","value":"PublicKey(publicKey: [1, 2, 3], signatureAlgorithm: ECDSA_P256)","cadence_type":"PublicKey"}
+{"type":"step","file":"crypto_signatures_test.cdc","line":30}
+{"type":"call","name":"PublicKey.verify","args":[{"name":"signature","value":"[4, 5, 6]","cadence_type":"[UInt8]"},{"name":"signedData","value":"[7, 8, 9]","cadence_type":"[UInt8]"},{"name":"domainSeparationTag","value":"FLOW","cadence_type":"String"},{"name":"hashAlgorithm","value":"SHA2_256","cadence_type":"enum:HashAlgorithm:UInt8"}]}
+{"type":"return","value":"true","cadence_type":"Bool"}
+{"type":"variable","name":"ok","value":"true","cadence_type":"Bool"}
+{"type":"step","file":"crypto_signatures_test.cdc","line":36}
+{"type":"return","value":"true","cadence_type":"Bool"}
+{"type":"step","file":"crypto_signatures_test.cdc","line":41}
+{"type":"return","value":"true","cadence_type":"Bool"}

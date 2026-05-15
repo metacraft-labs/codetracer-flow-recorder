@@ -1,0 +1,10 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"type_aliases_test.cdc","line":30}
+{"type":"call","name":"compute"}
+{"type":"type_alias","alias_name":"Coin","underlying_type":"UFix64"}
+{"type":"step","file":"type_aliases_test.cdc","line":26}
+{"type":"variable","name":"amount","value":"1.5","cadence_type":"UFix64"}
+{"type":"step","file":"type_aliases_test.cdc","line":27}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"type_aliases_test.cdc","line":31}
+{"type":"return","value":"0","cadence_type":"Int"}

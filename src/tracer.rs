@@ -234,6 +234,50 @@ pub enum TraceEvent {
         /// step-local).
         varname: String,
     },
+
+    /// Cadence 1.x `type alias` declaration metadata.  Cadence permits
+    /// top-level `access(all) type alias <Alias> = <Underlying>`
+    /// declarations; the alias is a compile-time-only renaming so
+    /// values declared with the alias type carry the underlying
+    /// type's typed `ValueRecord` variant.  The recorder surfaces the
+    /// alias → underlying linkage as a tagged
+    /// `CadenceTypeAlias:<Alias>:<Underlying>` io_event so downstream
+    /// consumers can resolve aliases without re-parsing the source.
+    ///
+    /// Closes the M10 `type_aliases_test` deliverable: the alias
+    /// metadata is visible to the strict pin via the io-event channel.
+    #[serde(rename = "type_alias")]
+    TypeAlias {
+        alias_name: String,
+        underlying_type: String,
+    },
+
+    /// Cadence 1.x attachment-attach event.  The attachment value
+    /// itself carries `<Att>@<Target>` as its type-id; this event
+    /// surfaces the attach site as a tagged
+    /// `CadenceAttachmentAttach:<Att>:<Target>` io_event so the
+    /// attachment-to-base linkage is visible on the io-event channel
+    /// independently of the typed-local snapshot.
+    ///
+    /// Closes the M10 `attachments_test` deliverable: each attach
+    /// surfaces with the (attachment, target) pair on the io-event
+    /// channel.
+    #[serde(rename = "attachment_attach")]
+    AttachmentAttach {
+        attachment_type: String,
+        target_type: String,
+    },
+
+    /// Cadence 1.x attachment-remove event — the symmetric counterpart
+    /// to `AttachmentAttach`.  Surfaces as a tagged
+    /// `CadenceAttachmentRemove:<Att>:<Target>` io_event so the
+    /// attach/remove pair is visible end-to-end on the io-event
+    /// channel.
+    #[serde(rename = "attachment_remove")]
+    AttachmentRemove {
+        attachment_type: String,
+        target_type: String,
+    },
 }
 
 /// A helper-side call argument staged onto the next CodeTracer Call record.
@@ -1164,6 +1208,69 @@ impl CadenceTracer {
                         &format!(
                             "CadenceAnyType:{}:{}:{}",
                             static_type, runtime_type, varname
+                        ),
+                    );
+                }
+
+                TraceEvent::TypeAlias {
+                    alias_name,
+                    underlying_type,
+                } => {
+                    // Cadence 1.x type-alias declarations are
+                    // compile-time-only renamings — the alias name is
+                    // not visible in the bound value's typed
+                    // ValueRecord variant.  Surface the alias →
+                    // underlying linkage via a tagged
+                    // `CadenceTypeAlias:<Alias>:<Underlying>` io event
+                    // so downstream consumers can resolve aliases on
+                    // the io-event channel.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!("CadenceTypeAlias:{}:{}", alias_name, underlying_type),
+                        &format!("CadenceTypeAlias:{}:{}", alias_name, underlying_type),
+                    );
+                }
+
+                TraceEvent::AttachmentAttach {
+                    attachment_type,
+                    target_type,
+                } => {
+                    // Cadence 1.x attach-site metadata.  Surface the
+                    // (attachment, target) pair via a tagged
+                    // `CadenceAttachmentAttach:<Att>:<Target>` io
+                    // event so the attachment-to-base linkage is
+                    // independently visible from the typed-local
+                    // snapshot of the attachment value.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!(
+                            "CadenceAttachmentAttach:{}:{}",
+                            attachment_type, target_type
+                        ),
+                        &format!(
+                            "CadenceAttachmentAttach:{}:{}",
+                            attachment_type, target_type
+                        ),
+                    );
+                }
+
+                TraceEvent::AttachmentRemove {
+                    attachment_type,
+                    target_type,
+                } => {
+                    // Symmetric counterpart to `AttachmentAttach`.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!(
+                            "CadenceAttachmentRemove:{}:{}",
+                            attachment_type, target_type
+                        ),
+                        &format!(
+                            "CadenceAttachmentRemove:{}:{}",
+                            attachment_type, target_type
                         ),
                     );
                 }
