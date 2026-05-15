@@ -1,0 +1,15 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"fixed_point_test.cdc","line":31}
+{"type":"call","name":"compute"}
+{"type":"step","file":"fixed_point_test.cdc","line":24}
+{"type":"variable","name":"f","value":"-1.5","cadence_type":"Fix64"}
+{"type":"step","file":"fixed_point_test.cdc","line":25}
+{"type":"variable","name":"u","value":"0.25","cadence_type":"UFix64"}
+{"type":"step","file":"fixed_point_test.cdc","line":26}
+{"type":"variable","name":"prod","value":"-0.375","cadence_type":"Fix64"}
+{"type":"step","file":"fixed_point_test.cdc","line":27}
+{"type":"variable","name":"sum","value":"1.25","cadence_type":"UFix64"}
+{"type":"step","file":"fixed_point_test.cdc","line":28}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"fixed_point_test.cdc","line":32}
+{"type":"return","value":"0","cadence_type":"Int"}

@@ -181,6 +181,59 @@ pub enum TraceEvent {
         #[serde(default)]
         fields: Vec<TraceArg>,
     },
+
+    /// Composite-kind metadata tag.  Cadence has three composite
+    /// declaration kinds (`struct`, `resource`, `event`), each
+    /// surfaced as a distinct `composite_kind` discriminator on the
+    /// declaration's type metadata.  The recorder routes each as a
+    /// tagged io_event (`CompositeKindStructure:<Type>`,
+    /// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
+    /// through `EventLogKind::TraceLogEvent` → `ioStderr` so the
+    /// kind is visible to the strict pin without re-deriving it
+    /// from the declaration source.
+    ///
+    /// Closes the M10 `composite_types_test` deliverable: each of
+    /// the three composite kinds surfaces on the io-event channel
+    /// with a distinct tag prefix.
+    #[serde(rename = "composite_kind")]
+    CompositeKind {
+        /// One of `"structure"` / `"resource"` / `"event"` — the
+        /// canonical Cadence composite-kind discriminators.  Any
+        /// other value is silently dropped (the recorder skips
+        /// unrecognised kinds rather than emitting a malformed tag).
+        kind: String,
+        type_name: String,
+    },
+
+    /// Dynamic-type bind metadata for `AnyResource` / `AnyStruct`
+    /// parameters.  Cadence permits passing concrete resources /
+    /// structs through a function parameter typed as the dynamic
+    /// supertype (`@AnyResource` / `AnyStruct` / `AnyAuthAccount` /
+    /// `AnyPublicAccount`); the runtime preserves the concrete type
+    /// information.  The recorder routes a tagged io_event
+    /// (`CadenceAnyType:<static>:<runtime>:<varname>`) through
+    /// `EventLogKind::TraceLogEvent` → `ioStderr` so both the static
+    /// supertype and the concrete runtime type are visible to the
+    /// strict pin without re-deriving them from the call frame's
+    /// argument types.
+    ///
+    /// Closes the M10 `anyresource_anystruct_test` deliverable: each
+    /// dynamic parameter surfaces with both type-ids visible on the
+    /// io-event channel.
+    #[serde(rename = "any_type_bind")]
+    AnyTypeBind {
+        /// The static (declared-parameter) type — one of
+        /// `AnyResource` / `AnyStruct` / `AnyAuthAccount` /
+        /// `AnyPublicAccount`.
+        static_type: String,
+        /// The concrete runtime type id — e.g. `Vault`, `Token`,
+        /// `MyResource.Inner`.
+        runtime_type: String,
+        /// The variable name the dynamic value is bound to in the
+        /// call frame (used for cross-referencing against the
+        /// step-local).
+        varname: String,
+    },
 }
 
 /// A helper-side call argument staged onto the next CodeTracer Call record.
@@ -455,6 +508,100 @@ fn stable_address_hash(s: &str) -> u64 {
     h & 0x7fffffffffffffff
 }
 
+/// Parse a Cadence fixed-point literal (`-1.5`, `0.25`, `1.0`,
+/// `12.5`) into the canonical 1e8 scaled integer form Cadence uses
+/// internally for `Fix64` / `UFix64`.  Returns `None` for any input
+/// that does not parse as a (signed) decimal with at most 8 fractional
+/// digits — those cases bubble up to the residual `Raw` fallback in
+/// `value_record`.
+///
+/// Examples:
+///
+/// * `parse_fixed_point_scaled("-1.5")` → `Some(-150_000_000)`
+/// * `parse_fixed_point_scaled("0.25")` → `Some(25_000_000)`
+/// * `parse_fixed_point_scaled("1.0")` → `Some(100_000_000)`
+/// * `parse_fixed_point_scaled("12.5")` → `Some(1_250_000_000)`
+/// * `parse_fixed_point_scaled("12")` → `Some(1_200_000_000)`
+fn parse_fixed_point_scaled(value: &str) -> Option<i64> {
+    let v = value.trim();
+    let (sign, rest) = if let Some(stripped) = v.strip_prefix('-') {
+        (-1i64, stripped)
+    } else if let Some(stripped) = v.strip_prefix('+') {
+        (1i64, stripped)
+    } else {
+        (1i64, v)
+    };
+    let (int_part, frac_part) = match rest.split_once('.') {
+        Some((i, f)) => (i, f),
+        None => (rest, ""),
+    };
+    if int_part.is_empty() && frac_part.is_empty() {
+        return None;
+    }
+    if !int_part.chars().all(|c| c.is_ascii_digit()) && !int_part.is_empty() {
+        return None;
+    }
+    if !frac_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    if frac_part.len() > 8 {
+        return None;
+    }
+    let int_val: i64 = if int_part.is_empty() {
+        0
+    } else {
+        int_part.parse().ok()?
+    };
+    let mut padded = frac_part.to_string();
+    while padded.len() < 8 {
+        padded.push('0');
+    }
+    let frac_val: i64 = padded.parse().ok()?;
+    let magnitude = int_val.checked_mul(100_000_000)?.checked_add(frac_val)?;
+    Some(sign * magnitude)
+}
+
+/// Resolve the source path for a step event, dispatching on whether
+/// the helper-side `file` field refers to the entry source or a
+/// sibling fixture.  The Cadence entry point may `import` a contract
+/// declared in a separate `.cdc` file; when the helper emits a step
+/// with a different `file` basename, the recorder must surface that
+/// step against the imported contract's source path so the trace's
+/// path table carries each contract's source independently.
+///
+/// Returns:
+///
+/// * The original `source_path` when `file` is empty or matches the
+///   entry source's basename.
+/// * `<source_path's directory>/<file>` when `file` is a sibling
+///   basename (no directory component).
+/// * The literal `file` value otherwise (already an absolute or
+///   directory-qualified path).
+fn resolve_step_source_path(source_path: &Path, file: &str) -> std::path::PathBuf {
+    let trimmed = file.trim();
+    if trimmed.is_empty() {
+        return source_path.to_path_buf();
+    }
+    let entry_name = source_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    if trimmed == entry_name {
+        return source_path.to_path_buf();
+    }
+    // If `file` already carries a directory component (contains '/'),
+    // honour it verbatim.
+    if trimmed.contains('/') {
+        return std::path::PathBuf::from(trimmed);
+    }
+    // Bare basename: resolve against the entry source's parent dir.
+    if let Some(parent) = source_path.parent() {
+        parent.join(trimmed)
+    } else {
+        std::path::PathBuf::from(trimmed)
+    }
+}
+
 /// Map a Cadence access modifier (`self` / `contract` / `account` /
 /// `all`) to the canonical `Access<Tag>` visibility tag the recorder
 /// surfaces in the `CadenceAccess:<function>:<Tag>` io_event.
@@ -715,8 +862,19 @@ impl CadenceTracer {
     fn convert_events(&mut self, source_path: &Path, events: &[TraceEvent]) -> Result<()> {
         for event in events {
             match event {
-                TraceEvent::Step { file: _, line } => {
-                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+                TraceEvent::Step { file, line } => {
+                    // Resolve the step's source path: if the helper-side
+                    // `file` field is present and refers to a sibling
+                    // fixture (a different file from the main entry-point
+                    // source), use that path so multi-file imports
+                    // surface as distinct entries in the trace's path
+                    // table.  Closes the M10 `contracts_imports_test`
+                    // deliverable: import resolution is visible via the
+                    // per-step source path.  Falls back to the entry
+                    // source when `file` is empty or matches the entry
+                    // file's basename.
+                    let resolved = resolve_step_source_path(source_path, file);
+                    TraceWriter::register_step(&mut *self.writer, &resolved, Line(*line as i64));
                 }
                 TraceEvent::Variable {
                     name,
@@ -957,6 +1115,56 @@ impl CadenceTracer {
                         EventLogKind::TraceLogEvent,
                         &format!("ForceNilUnwrap:{}", context),
                         &format!("ForceNilUnwrap:{}", context),
+                    );
+                }
+
+                TraceEvent::CompositeKind { kind, type_name } => {
+                    // Map the helper-side `kind` discriminator onto
+                    // the canonical Cadence composite-kind tag (the
+                    // `interpreter.CompositeKind` enum surface, see
+                    // `onflow/cadence runtime/sema/check_composite.go`).
+                    // Unknown kinds are silently dropped — the recorder
+                    // never emits a malformed tag.
+                    let tag = match kind.as_str() {
+                        "structure" => Some("CompositeKindStructure"),
+                        "resource" => Some("CompositeKindResource"),
+                        "event" => Some("CompositeKindEvent"),
+                        _ => None,
+                    };
+                    if let Some(tag) = tag {
+                        TraceWriter::register_special_event(
+                            &mut *self.writer,
+                            EventLogKind::TraceLogEvent,
+                            &format!("{}:{}", tag, type_name),
+                            &format!("{}:{}", tag, type_name),
+                        );
+                    }
+                }
+
+                TraceEvent::AnyTypeBind {
+                    static_type,
+                    runtime_type,
+                    varname,
+                } => {
+                    // Surface both the static (`AnyResource` /
+                    // `AnyStruct` / `AnyAuthAccount` /
+                    // `AnyPublicAccount`) supertype and the concrete
+                    // runtime type id of the bound value through the
+                    // `CadenceAnyType:` tag channel.  The varname
+                    // suffix lets the strict pin cross-reference
+                    // against the step-local that carries the typed
+                    // ValueRecord variant.
+                    TraceWriter::register_special_event(
+                        &mut *self.writer,
+                        EventLogKind::TraceLogEvent,
+                        &format!(
+                            "CadenceAnyType:{}:{}:{}",
+                            static_type, runtime_type, varname
+                        ),
+                        &format!(
+                            "CadenceAnyType:{}:{}:{}",
+                            static_type, runtime_type, varname
+                        ),
                     );
                 }
 
@@ -1392,6 +1600,33 @@ impl CadenceTracer {
                     type_id,
                 }
             }
+            // -------- Cadence Fix64 / UFix64 fixed-point ---------------
+            // Cadence fixed-point types carry 8 decimal places of
+            // precision (`UFix64.max == 184467440737.09551615`).  The
+            // canonical scaled integer form (value * 10^8) preserves
+            // the exact decimal payload across the trace; the type-id
+            // metadata (`Fix64` / `UFix64` lang_type) carries the
+            // scaling factor implicitly.  Surface as
+            // `ValueRecord::Int` (matching the M2 numeric-width
+            // convention for typed leaves) so the decoder sees a
+            // typed scalar rather than the residual `Raw` fallback
+            // that fractional decimals previously hit.  Closes the
+            // M9 known limitation that `Fix64` / `UFix64` fell back
+            // to `Raw` (see the `emit:Transfer.amount` strict pin in
+            // `test_events_emit_test_via_ct_print_full`).
+            Some(t) if matches!(t, "Fix64" | "UFix64") => {
+                let type_id = self.ensure_type(TypeKind::Int, t);
+                let v = value.trim();
+                if let Some(scaled) = parse_fixed_point_scaled(v) {
+                    ValueRecord::Int { i: scaled, type_id }
+                } else {
+                    ValueRecord::Raw {
+                        r: value.to_string(),
+                        type_id,
+                    }
+                }
+            }
+
             // Numeric types parse to i64 when they fit (this is the same
             // set the previous implementation handled implicitly via the
             // `value.parse::<i64>()` branch).
