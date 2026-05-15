@@ -1906,15 +1906,22 @@ fn test_resource_capability_test_via_ct_print_full() {
         .filter_map(|v| v.as_str())
         .collect();
     // The function table lists every function that surfaces an
-    // explicit `call` NDJSON event — `main`, `compute`, and the
-    // resource-method `Vault.deposit`.  Implicit Cadence members
-    // (`Coin.init`, `Vault.init`, the synthesised getter for
-    // `vault.balance`) do not produce `call` events in the helper's
-    // NDJSON output and so do not appear here; their effects are
-    // observable through the `resource_create` / `resource_destroy`
-    // and `variable` event channels respectively.  The strict pin
-    // below asserts the exact emitted set.
-    assert_eq!(functions, vec!["main", "compute", "deposit"]);
+    // explicit `call` NDJSON event (`main`, `compute`, the
+    // resource-method `Vault.deposit`) plus the implicit Cadence
+    // initializers synthesised from the `resource_create` channel
+    // (`Coin.init` and `Vault.init`, in encounter order).  The
+    // initializers are registered with `ensure_function_id` only —
+    // no synthetic `call_entry` / `call_exit` is emitted, so the
+    // calls / event counts below stay aligned with the explicit
+    // `call` events.  Field-getter synthesis (e.g. `Vault.balance`
+    // for `vault.balance`) would require a dedicated NDJSON marker
+    // — the current `variable` event carries an unqualified name
+    // (`balance`) with no resource-path prefix — and is left as a
+    // follow-up.
+    assert_eq!(
+        functions,
+        vec!["main", "compute", "Coin.init", "Vault.init", "deposit"],
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -2247,13 +2254,16 @@ fn test_account_storage_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main` + `compute` from explicit `call` events, plus the
+    // implicit `Vault.init` synthesised from the `resource_create`
+    // channel.
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -2346,6 +2356,12 @@ fn test_references_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // Explicit `call` events (`main`, `compute`, `read_plain`,
+    // `read_restricted`, `apply_withdraw`) plus the implicit
+    // `Vault.init` synthesised from the `resource_create` channel.
+    // `Vault.init` lands between `compute` and `read_plain` because
+    // the resource_create event precedes the first `read_plain`
+    // call in the helper-side NDJSON stream.
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
@@ -2357,6 +2373,7 @@ fn test_references_test_via_ct_print_full() {
         vec![
             "main",
             "compute",
+            "Vault.init",
             "read_plain",
             "read_restricted",
             "apply_withdraw",
@@ -2870,13 +2887,17 @@ fn test_resources_full_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main` + `compute` from explicit `call` events, plus the
+    // implicit `Vault.init` and `Box.init` synthesised from the
+    // `resource_create` channel (Vault first, then Box, in the
+    // helper's emission order).
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["main", "compute", "Vault.init", "Box.init"],);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
@@ -3160,13 +3181,21 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // Explicit `call` events (`main`, `compute`, `deposit`) plus
+    // the implicit `Account.init` synthesised from the
+    // `resource_create` channel.  `Account.init` lands between
+    // `compute` and `deposit` because the helper emits the
+    // `resource_create` event before the first `deposit` call.
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "deposit"]);
+    assert_eq!(
+        functions,
+        vec!["main", "compute", "Account.init", "deposit"],
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -3466,6 +3495,12 @@ fn test_interfaces_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table: both interface and concrete frames -------
+    // Explicit `call` events plus the implicit `MyVault.init` and
+    // `Vault.init` synthesised from the `resource_create` channel.
+    // `MyVault.init` lands between `compute` and `consume`
+    // (resource_create precedes the `consume` call in the helper
+    // emission stream); `Vault.init` lands at the tail
+    // (resource_create event is the last call-shaped event).
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
@@ -3477,15 +3512,18 @@ fn test_interfaces_test_via_ct_print_full() {
         vec![
             "main",
             "compute",
+            "MyVault.init",
             "consume",
             "Provider.provide",
             "MyVault.provide",
+            "Vault.init",
         ],
         "Both the interface-typed `Provider.provide` and the concrete \
          `MyVault.provide` must surface in the function table — the \
          frontend uses the dual-frame pattern to render interface \
          dispatch in the call trace independently of the concrete \
-         implementation.",
+         implementation.  The implicit `<Type>.init` entries are \
+         synthesised from the `resource_create` channel.",
     );
 
     // ----- counts -----------------------------------------------------
@@ -3672,13 +3710,18 @@ fn test_resource_collections_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main` + `compute` from explicit `call` events, plus the
+    // implicit `Vault.init` synthesised once from the
+    // `resource_create` channel (every `resource_create` for the
+    // same `<Type>` collapses through `ensure_function_id`'s
+    // dedup).
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -4052,13 +4095,17 @@ fn test_optional_chaining_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main` + `compute` from explicit `call` events, plus the
+    // implicit `Vault.init` and `Box.init` synthesised from the
+    // `resource_create` channel (Vault first, then Box, in the
+    // helper's emission order).
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["main", "compute", "Vault.init", "Box.init"],);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -4705,13 +4752,20 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // Explicit `call` events (`main`, `compute`, `store`, `process`)
+    // plus the implicit `Vault.init` synthesised from the
+    // `resource_create` channel (the resource_create event precedes
+    // the first `store` call in the helper-side NDJSON stream).
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "store", "process"]);
+    assert_eq!(
+        functions,
+        vec!["main", "compute", "Vault.init", "store", "process"],
+    );
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
@@ -4859,13 +4913,21 @@ fn test_composite_types_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main`, `compute`, and `C.create_vault` from explicit `call`
+    // events, plus the implicit `C.Vault.init` synthesised from the
+    // `resource_create` channel.  The fully qualified `C.Vault`
+    // type name is preserved verbatim — it matches how Cadence
+    // qualifies a contract-nested resource type.
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "C.create_vault"]);
+    assert_eq!(
+        functions,
+        vec!["main", "compute", "C.create_vault", "C.Vault.init"],
+    );
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
@@ -5674,10 +5736,7 @@ fn test_crypto_signatures_test_via_ct_print_full() {
     // hashAlgorithm: enum:HashAlgorithm:UInt8 → Variant SHA2_256
     assert_eq!(args[3]["varname"].as_str(), Some("hashAlgorithm"));
     assert_eq!(args[3]["value"]["kind"].as_str(), Some("Variant"));
-    assert_eq!(
-        args[3]["value"]["discriminator"].as_str(),
-        Some("SHA2_256")
-    );
+    assert_eq!(args[3]["value"]["discriminator"].as_str(), Some("SHA2_256"));
 
     // ----- verify result: ValueRecord::Bool true ---------------------
     let verify_exit = events
@@ -5840,13 +5899,16 @@ fn test_attachments_test_via_ct_print_full() {
     assert_metadata_program_ends_with(&doc, &source_path);
 
     // ----- Function table --------------------------------------------
+    // `main` + `compute` from explicit `call` events, plus the
+    // implicit `Vault.init` synthesised from the `resource_create`
+    // channel.
     let functions: Vec<&str> = doc["functions"]
         .as_array()
         .expect("functions array")
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -5962,7 +6024,12 @@ fn test_multi_test_entry_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
-            "testFoo", "helperFoo", "testBar", "helperBar", "testBaz", "helperBaz",
+            "testFoo",
+            "helperFoo",
+            "testBar",
+            "helperBar",
+            "testBaz",
+            "helperBaz",
         ],
         "Each top-level entry-point AND its helper must appear as an \
          independent Function in the function table — no cross-\
@@ -5972,11 +6039,7 @@ fn test_multi_test_entry_test_via_ct_print_full() {
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 9 explicit step events + 1 implicit start step at the entry.
-    assert_eq!(
-        counts["steps"].as_u64(),
-        Some(10),
-        "steps; counts={counts}"
-    );
+    assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
     // 3 entries + 3 helpers = 6 calls.
     assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     assert_eq!(
@@ -6023,4 +6086,3 @@ fn test_multi_test_entry_test_via_ct_print_full() {
          exits with the same Int payload."
     );
 }
-
