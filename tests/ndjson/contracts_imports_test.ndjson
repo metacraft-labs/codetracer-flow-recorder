@@ -1,0 +1,13 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"contracts_imports_test.cdc","line":28}
+{"type":"call","name":"A.0x01.ContractA.foo"}
+{"type":"step","file":"contracts_imports_test_a.cdc","line":7}
+{"type":"return","value":"11","cadence_type":"Int"}
+{"type":"variable","name":"x","value":"11","cadence_type":"Int"}
+{"type":"step","file":"contracts_imports_test.cdc","line":29}
+{"type":"call","name":"A.0x02.ContractB.bar"}
+{"type":"step","file":"contracts_imports_test_b.cdc","line":7}
+{"type":"return","value":"22","cadence_type":"Int"}
+{"type":"variable","name":"y","value":"22","cadence_type":"Int"}
+{"type":"step","file":"contracts_imports_test.cdc","line":30}
+{"type":"return","value":"33","cadence_type":"Int"}

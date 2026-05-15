@@ -1,0 +1,22 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"composite_types_test.cdc","line":54}
+{"type":"call","name":"compute"}
+{"type":"step","file":"composite_types_test.cdc","line":46}
+{"type":"composite_kind","kind":"structure","type_name":"C.Coord"}
+{"type":"variable","name":"p","value":"Coord(x: 3, y: 4)","cadence_type":"C.Coord"}
+{"type":"step","file":"composite_types_test.cdc","line":47}
+{"type":"call","name":"C.create_vault"}
+{"type":"step","file":"composite_types_test.cdc","line":40}
+{"type":"composite_kind","kind":"resource","type_name":"C.Vault"}
+{"type":"resource_create","resource_type":"C.Vault","uuid":7001,"owner":"alice","file":"composite_types_test.cdc","line":40}
+{"type":"return","value":"@C.Vault#7001@alice","cadence_type":"@C.Vault"}
+{"type":"variable","name":"v","value":"@C.Vault#7001@alice","cadence_type":"@C.Vault"}
+{"type":"step","file":"composite_types_test.cdc","line":48}
+{"type":"composite_kind","kind":"event","type_name":"C.Spawned"}
+{"type":"emit","name":"C.Spawned","fields":[{"name":"id","value":"1","cadence_type":"Int"}]}
+{"type":"step","file":"composite_types_test.cdc","line":49}
+{"type":"resource_destroy","resource_type":"C.Vault","uuid":7001,"owner":"alice","file":"composite_types_test.cdc","line":49}
+{"type":"step","file":"composite_types_test.cdc","line":50}
+{"type":"return","value":"7","cadence_type":"Int"}
+{"type":"step","file":"composite_types_test.cdc","line":55}
+{"type":"return","value":"7","cadence_type":"Int"}

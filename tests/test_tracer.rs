@@ -3330,14 +3330,12 @@ fn test_events_emit_test_via_ct_print_full() {
     );
 
     // ----- Transfer.amount surfaces as a typed leaf (UFix64) --------
-    // The recorder does not yet have a dedicated UFix64 path, so
-    // `12.5` falls through to the residual Raw fallback (the
-    // `value.parse::<i64>()` branch fails for a fractional decimal).
-    // This is documented in the M9 known-limitations list (Fix64 /
-    // UFix64 → ValueRecord::Float is the planned shape per the
-    // `fixed_point_test` deliverable in M10).  Pinning the exact Raw
-    // payload here so any future move to ValueRecord::Float lands
-    // visibly through this strict pin instead of silently weakening.
+    // M10 Round 4 (`fixed_point_test`) shipped a dedicated `UFix64`
+    // dispatch in the recorder: `12.5` surfaces as the canonical 1e8
+    // scaled `ValueRecord::Int` (`12.5 * 10^8 == 1_250_000_000`),
+    // with the type-id metadata (`UFix64`) carrying the scaling
+    // factor implicitly.  Closes the M9 known limitation that
+    // fractional decimals fell through to `Raw`.
     let amount = doc["events"]
         .as_array()
         .unwrap()
@@ -3346,8 +3344,8 @@ fn test_events_emit_test_via_ct_print_full() {
         .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
         .find(|v| v["varname"] == "emit:Transfer.amount")
         .expect("emit:Transfer.amount should be present");
-    assert_eq!(amount["value"]["kind"].as_str(), Some("Raw"));
-    assert_eq!(amount["value"]["r"].as_str(), Some("12.5"));
+    assert_eq!(amount["value"]["kind"].as_str(), Some("Int"));
+    assert_eq!(amount["value"]["i"].as_i64(), Some(1_250_000_000));
 
     // ----- NFTMinted.metadata surfaces as ValueRecord::Sequence -----
     // (Cadence dictionaries surface as Sequence-of-Tuple via the
@@ -3731,7 +3729,10 @@ fn test_resource_collections_test_via_ct_print_full() {
         "dict snapshots: initial empty + 2 inserts + 1 remove"
     );
     // Snapshot 0: empty.
-    assert_eq!(dict_snapshots[0]["value"]["kind"].as_str(), Some("Sequence"));
+    assert_eq!(
+        dict_snapshots[0]["value"]["kind"].as_str(),
+        Some("Sequence")
+    );
     assert_eq!(
         dict_snapshots[0]["value"]["elements"]
             .as_array()
@@ -4474,4 +4475,757 @@ fn test_hash_builtins_test_via_ct_print_full() {
         "compute and main both return UInt64 244 = 0xba + 0x3a (the \
          first byte of each digest)."
     );
+}
+
+// ---------------------------------------------------------------------------
+// M10 Round 4 fixtures: path_types / fixed_point / contracts_imports /
+//                       composite_types / anyresource_anystruct
+// ---------------------------------------------------------------------------
+//
+// Round 3 closed the resource_collections / access_control /
+// optional_chaining / scripts / hash_builtins deliverables.  Round 4 closes
+// the remaining M10 high-priority Cadence constructs:
+//
+//   * `path_types_test`              — `/storage` / `/public` / `/private`
+//                                      Path values surface as the canonical
+//                                      `Struct { String "domain", String
+//                                      "identifier" }` shape.  Already
+//                                      supported by the recorder via the
+//                                      existing Path branch.
+//   * `fixed_point_test`             — `Fix64` / `UFix64` fixed-point
+//                                      arithmetic surfaces as `Int` with
+//                                      the canonical 1e8 scaling factor
+//                                      preserved in the type-id metadata
+//                                      (`Fix64` / `UFix64` lang_type names).
+//   * `contracts_imports_test`       — fully-qualified `A.<address>.
+//                                      MyContract.foo` function names
+//                                      survive end-to-end; multi-file
+//                                      source-mapping metadata visible via
+//                                      the per-file path table.
+//   * `composite_types_test`         — `struct` / `resource` / `event`
+//                                      composite-kind tags surface via
+//                                      paired `CompositeKindStructure` /
+//                                      `CompositeKindResource` /
+//                                      `CompositeKindEvent` io_events.
+//   * `anyresource_anystruct_test`   — `AnyResource` / `AnyStruct` dynamic
+//                                      parameters surface as the *concrete*
+//                                      runtime type's typed ValueRecord
+//                                      variant (NOT Raw); both the static
+//                                      and concrete-runtime type-ids
+//                                      surface via `CadenceAnyType:` tags.
+
+// --- path_types_test.cdc -------------------------------------------------
+
+const PATH_TYPES_NDJSON: &str = include_str!("ndjson/path_types_test.ndjson");
+
+/// Pins Cadence Path values across the three path domains.
+///
+/// `/storage/<id>` (`StoragePath`), `/public/<id>` (`PublicPath`) and
+/// `/private/<id>` (`PrivatePath`) all surface as the canonical
+/// `ValueRecord::Struct { [String "<domain>", String "<identifier>"] }`
+/// shape so downstream consumers can resolve the domain and identifier
+/// without re-parsing the slash form.  Already supported by the
+/// recorder via the existing `value_record` Path branch (lines 1156-
+/// 1192 in `src/tracer.rs`); this strict pin closes the M10 deliverable
+/// by asserting the exact field shape end-to-end.
+#[test]
+fn test_path_types_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_path_types_test_via_ct_print_full",
+        "path_types_test.cdc",
+        PATH_TYPES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 6 explicit step events + 1 implicit start step = 7 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
+    // main + compute = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // No io_events: Path values are pure typed locals.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 7 steps + 2 call_entry + 2 call_exit + 0 io = 11 events.
+    assert_eq!(events.len(), 11, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each Path local decodes as Struct { domain, identifier } --
+    let path_locals: Vec<(String, String, String)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "p1" | "p2" | "p3") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Struct"),
+                "Path local `{}` must decode as ValueRecord::Struct \
+                 (with domain + identifier fields); got {}",
+                name,
+                v["value"]
+            );
+            let fields = v["value"]["field_values"].as_array()?;
+            assert_eq!(
+                fields.len(),
+                2,
+                "Path Struct must carry 2 fields (domain, identifier) \
+                 for `{name}`; got {fields:?}"
+            );
+            assert_eq!(
+                fields[0]["kind"].as_str(),
+                Some("String"),
+                "Path.domain must decode as ValueRecord::String"
+            );
+            assert_eq!(
+                fields[1]["kind"].as_str(),
+                Some("String"),
+                "Path.identifier must decode as ValueRecord::String"
+            );
+            let domain = fields[0]["text"].as_str()?.to_string();
+            let identifier = fields[1]["text"].as_str()?.to_string();
+            Some((name, domain, identifier))
+        })
+        .collect();
+    assert_eq!(
+        path_locals,
+        vec![
+            ("p1".into(), "storage".into(), "Vault".into()),
+            ("p2".into(), "public".into(), "Vault".into()),
+            ("p3".into(), "private".into(), "Vault".into()),
+        ],
+        "Each Path domain decodes verbatim into the (domain, identifier) \
+         pair off the canonical `/<domain>/<identifier>` slash form."
+    );
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- anyresource_anystruct_test.cdc -------------------------------------
+
+const ANYRESOURCE_ANYSTRUCT_NDJSON: &str = include_str!("ndjson/anyresource_anystruct_test.ndjson");
+
+/// Pins Cadence dynamic supertypes: `AnyResource` / `AnyStruct`.
+///
+/// Cadence permits passing a concrete `@T` resource through a
+/// parameter typed `@AnyResource`, and any struct value through
+/// a parameter typed `AnyStruct`.  The runtime preserves the
+/// concrete type information; the recorder must surface BOTH:
+///
+///   * The concrete runtime type's typed `ValueRecord` variant on
+///     the parameter local (NOT a `Raw` fallback) — `@Vault`
+///     surfaces as the existing typed `Struct { ResourceType,
+///     ResourceUuid, ResourceOwner }` payload, `Token(id: 9)`
+///     surfaces as the existing typed `Struct { field_values }`
+///     payload via the named-struct dispatch in `value_record`.
+///   * Both the static (declared-parameter) type and the concrete
+///     runtime type id via a tagged `CadenceAnyType:<static>:
+///     <runtime>:<varname>` io_event so downstream tooling can
+///     correlate the dynamic dispatch with the call frame's
+///     argument types.
+///
+/// Recorder change: a new `TraceEvent::AnyTypeBind { static_type,
+/// runtime_type, varname }` variant routes through
+/// `register_special_event` with the canonical
+/// `CadenceAnyType:<static>:<runtime>:<varname>` tag preserved on
+/// both the metadata and the text payload (so the multi-stream
+/// writer's metadata-drop never loses the discriminator triple).
+#[test]
+fn test_anyresource_anystruct_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_anyresource_anystruct_test_via_ct_print_full",
+        "anyresource_anystruct_test.cdc",
+        ANYRESOURCE_ANYSTRUCT_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "store", "process"]);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "store".to_string(),
+            "process".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "store".to_string(),
+            "process".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Step indices monotonic ------------------------------------
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Tagged CadenceAnyType io_events ---------------------------
+    // The strict pin asserts the exact (static, runtime, varname)
+    // triple for each dynamic-supertype binding.  The triple lets
+    // the frontend resolve both type-ids without re-deriving them
+    // from the call frame's typed args.
+    let events = doc["events"].as_array().expect("events array");
+    let any_type_tags: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .filter_map(|e| {
+            let text = e["text"].as_str()?;
+            if !text.starts_with("CadenceAnyType:") {
+                return None;
+            }
+            Some((e["io_kind"].as_str().unwrap_or("?"), text))
+        })
+        .collect();
+    assert_eq!(
+        any_type_tags,
+        vec![
+            ("ioStderr", "CadenceAnyType:AnyResource:Vault:r"),
+            ("ioStderr", "CadenceAnyType:AnyStruct:Token:s"),
+        ],
+        "Each dynamic-supertype binding surfaces as a tagged \
+         CadenceAnyType:<static>:<runtime>:<varname> io_event so both \
+         the static (declared-parameter) and concrete-runtime type-ids \
+         are visible end-to-end."
+    );
+
+    // ----- Concrete runtime type surfaces as typed ValueRecord -------
+    // The `r` parameter on `store` is declared as `@AnyResource` but
+    // the bound value is `@Vault#8001@alice` — surfaces as the
+    // existing typed `Struct { ResourceType, ResourceUuid,
+    // ResourceOwner }` payload (NOT a `Raw` fallback).  We pin the
+    // call frame's `args[0]` shape rather than the step-local so the
+    // dispatch site is unambiguous.
+    let store_call = events
+        .iter()
+        .find(|e| e["kind"] == "call_entry" && e["function"] == "store")
+        .expect("store call_entry should be present");
+    let store_args = store_call["args"].as_array().expect("store.args");
+    assert_eq!(store_args.len(), 1);
+    assert_eq!(store_args[0]["varname"].as_str(), Some("r"));
+    assert_eq!(
+        store_args[0]["value"]["kind"].as_str(),
+        Some("Struct"),
+        "@AnyResource parameter must surface as the concrete runtime \
+         type's typed Struct (NOT Raw); got {}",
+        store_args[0]["value"]
+    );
+    let store_fields = store_args[0]["value"]["field_values"]
+        .as_array()
+        .expect("store.r field_values");
+    assert_eq!(store_fields.len(), 3, "@Vault carries (type, uuid, owner)");
+    assert_eq!(store_fields[0]["text"].as_str(), Some("Vault"));
+    assert_eq!(store_fields[1]["i"].as_i64(), Some(8001));
+    assert_eq!(store_fields[2]["text"].as_str(), Some("alice"));
+
+    // ----- AnyStruct binding: process(s: Token(id: 9)) ---------------
+    let process_call = events
+        .iter()
+        .find(|e| e["kind"] == "call_entry" && e["function"] == "process")
+        .expect("process call_entry should be present");
+    let process_args = process_call["args"].as_array().expect("process.args");
+    assert_eq!(process_args.len(), 1);
+    assert_eq!(process_args[0]["varname"].as_str(), Some("s"));
+    assert_eq!(
+        process_args[0]["value"]["kind"].as_str(),
+        Some("Struct"),
+        "AnyStruct parameter must surface as the concrete runtime \
+         struct (NOT Raw); got {}",
+        process_args[0]["value"]
+    );
+    let process_fields = process_args[0]["value"]["field_values"]
+        .as_array()
+        .expect("process.s field_values");
+    // Token has a single Int field `id`; the recorder's named-struct
+    // parser surfaces it as a typed Int leaf.
+    assert_eq!(process_fields.len(), 1);
+    assert_eq!(process_fields[0]["kind"].as_str(), Some("Int"));
+    assert_eq!(process_fields[0]["i"].as_i64(), Some(9));
+
+    // ----- Returns: store=Void, process=0, compute=0, main=0 ---------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![None, Some(0), Some(0), Some(0)]
+    );
+}
+
+// --- composite_types_test.cdc -------------------------------------------
+
+const COMPOSITE_TYPES_NDJSON: &str = include_str!("ndjson/composite_types_test.ndjson");
+
+/// Pins Cadence composite-declaration kinds: `struct` / `resource` /
+/// `event`.
+///
+/// The Cadence runtime tags each composite declaration with one of
+/// three distinct `interpreter.CompositeKind` discriminators
+/// (`Structure` / `Resource` / `Event`).  The recorder surfaces each
+/// kind as a tagged io_event (`CompositeKindStructure:<Type>`,
+/// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
+/// through `EventLogKind::TraceLogEvent` → `ioStderr`.  The `event`
+/// composite additionally surfaces as a tagged `CadenceEmit:` io_event
+/// when emitted (the existing M9 emit path).
+///
+/// Recorder change: a new `TraceEvent::CompositeKind { kind,
+/// type_name }` variant routes through `register_special_event` with
+/// the canonical `CompositeKind<Kind>:<Type>` tag preserved on both
+/// the metadata and the text payload (so the multi-stream writer's
+/// metadata-drop never loses the discriminator).
+#[test]
+fn test_composite_types_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_composite_types_test_via_ct_print_full",
+        "composite_types_test.cdc",
+        COMPOSITE_TYPES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "C.create_vault"]);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "C.create_vault".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "C.create_vault".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Step indices monotonic ------------------------------------
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Tagged composite-kind io_events ---------------------------
+    // Each composite-declaration kind surfaces with its canonical
+    // `CompositeKind<Kind>:<Type>` tag on the io-event channel.  The
+    // resource lifecycle (create + destroy) and the emit each
+    // additionally surface their own tagged events; we filter to the
+    // composite-kind tags via the literal `CompositeKind` prefix.
+    let events = doc["events"].as_array().expect("events array");
+    let composite_kind_tags: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .filter_map(|e| {
+            let text = e["text"].as_str()?;
+            if !text.starts_with("CompositeKind") {
+                return None;
+            }
+            Some((e["io_kind"].as_str().unwrap_or("?"), text))
+        })
+        .collect();
+    assert_eq!(
+        composite_kind_tags,
+        vec![
+            ("ioStderr", "CompositeKindStructure:C.Coord"),
+            ("ioStderr", "CompositeKindResource:C.Vault"),
+            ("ioStderr", "CompositeKindEvent:C.Spawned"),
+        ],
+        "Each composite-declaration kind surfaces with its canonical \
+         `CompositeKind<Kind>:<Type>` tag, in struct → resource → event \
+         declaration order."
+    );
+
+    // ----- The event composite ALSO surfaces as a CadenceEmit: tag ---
+    // The strict pin asserts that `event` declarations carry both the
+    // composite-kind metadata AND the emit-side tagged io_event so
+    // downstream tooling can correlate the kind with the emit site.
+    let emit_tags: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .filter_map(|e| {
+            let text = e["text"].as_str()?;
+            if !text.starts_with("CadenceEmit:") {
+                return None;
+            }
+            Some((e["io_kind"].as_str().unwrap_or("?"), text))
+        })
+        .collect();
+    assert_eq!(
+        emit_tags,
+        vec![("ioStderr", "CadenceEmit:C.Spawned(id: 1)")],
+        "Event-kind composites surface twice: once for the kind tag \
+         (CompositeKindEvent), once for the emit-site tag \
+         (CadenceEmit:<Name>(<args>))."
+    );
+
+    // ----- Per-emit field surfaces as a typed Int local --------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["emit:C.Spawned.id"]),
+        vec![("emit:C.Spawned.id".into(), 1)]
+    );
+
+    // ----- Struct local `p` decodes as ValueRecord::Struct -----------
+    let p = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "p")
+        .expect("p local should be present");
+    assert_eq!(
+        p["value"]["kind"].as_str(),
+        Some("Struct"),
+        "C.Coord local must decode as ValueRecord::Struct; got {}",
+        p["value"]
+    );
+    let p_fields = p["value"]["field_values"].as_array().unwrap();
+    assert_eq!(p_fields.len(), 2, "C.Coord has two fields (x, y)");
+    assert_eq!(p_fields[0]["kind"].as_str(), Some("Int"));
+    assert_eq!(p_fields[0]["i"].as_i64(), Some(3));
+    assert_eq!(p_fields[1]["kind"].as_str(), Some("Int"));
+    assert_eq!(p_fields[1]["i"].as_i64(), Some(4));
+
+    // ----- Resource local `v` decodes as ValueRecord::Struct ---------
+    // (typed { ResourceType, ResourceUuid, ResourceOwner } payload).
+    let v = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|var| var["varname"] == "v")
+        .expect("v local should be present");
+    assert_eq!(v["value"]["kind"].as_str(), Some("Struct"));
+    let v_fields = v["value"]["field_values"].as_array().unwrap();
+    assert_eq!(v_fields.len(), 3, "@C.Vault carries (type, uuid, owner)");
+    assert_eq!(v_fields[0]["text"].as_str(), Some("C.Vault"));
+    assert_eq!(v_fields[1]["i"].as_i64(), Some(7001));
+    assert_eq!(v_fields[2]["text"].as_str(), Some("alice"));
+
+    // ----- Returns: C.create_vault → struct, compute=7, main=7 -------
+    // C.create_vault returns a typed @C.Vault Struct; we walk only
+    // the Int-typed returns from compute + main here.  The earlier
+    // call-exit-sequence assertion already pins the call ordering.
+    let int_returns: Vec<i64> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .filter(|e| {
+            let f = e["function"].as_str().unwrap_or("");
+            f == "compute" || f == "main"
+        })
+        .map(|e| {
+            let rv = &e["return_value"];
+            assert_eq!(rv["kind"].as_str(), Some("Int"));
+            rv["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(int_returns, vec![7, 7]);
+}
+
+// --- contracts_imports_test.cdc -----------------------------------------
+
+const CONTRACTS_IMPORTS_NDJSON: &str = include_str!("ndjson/contracts_imports_test.ndjson");
+
+/// Pins Cadence import-resolution across multiple contract files.
+///
+/// The function table carries the canonical fully-qualified
+/// `A.<address>.<Contract>.<member>` names verbatim — no truncation,
+/// no re-rendering — so downstream tooling can resolve symbols
+/// against the on-chain naming scheme.  Source-mapping metadata
+/// surfaces each imported contract's `.cdc` file as a distinct entry
+/// in the trace's per-step paths array (the recorder learned to
+/// dispatch on the helper-side `file` field of step events: when
+/// `file` differs from the entry source's basename, the step is
+/// recorded against the resolved sibling fixture path so the
+/// frontend can navigate into the imported source verbatim).
+///
+/// Recorder change: `convert_events` Step branch routes the
+/// helper-side `file` field through the new
+/// `resolve_step_source_path` helper which maps a bare basename
+/// onto `<entry source dir>/<basename>` (and honours
+/// directory-qualified paths verbatim).
+#[test]
+fn test_contracts_imports_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_contracts_imports_test_via_ct_print_full",
+        "contracts_imports_test.cdc",
+        CONTRACTS_IMPORTS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table: fully-qualified import names verbatim -----
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec!["main", "A.0x01.ContractA.foo", "A.0x02.ContractB.bar"],
+        "Imported-contract qualified names must resolve verbatim — \
+         the entry `main` plus each `A.<address>.<Contract>.<member>` \
+         carries no truncation, no re-rendering."
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 7 explicit step events; the writer coalesces the implicit start
+    // step with the first same-source-line step → 6 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
+    // main + A.0x01.ContractA.foo + A.0x02.ContractB.bar = 3 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    // Three distinct source files surface in the per-step paths
+    // table: the entry `contracts_imports_test.cdc` plus each
+    // imported contract's source.
+    assert_eq!(
+        counts["paths"].as_u64(),
+        Some(3),
+        "paths; counts={counts} (entry + 2 imported contract sources)"
+    );
+    // No io_events: this fixture exercises pure imports.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 6 steps + 3 call_entry + 3 call_exit + 0 io = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "A.0x01.ContractA.foo".to_string(),
+            "A.0x02.ContractB.bar".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "A.0x01.ContractA.foo".to_string(),
+            "A.0x02.ContractB.bar".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- Per-step source-mapping metadata: all three files visible -
+    // Each step event carries a `path_id` referencing the trace's
+    // path table.  Walk the per-step path_ids in emission order and
+    // assert the step path basenames match the helper-side `file`
+    // dispatch: each imported contract's body lands against its own
+    // sibling fixture path, and the entry-file steps land against
+    // `contracts_imports_test.cdc`.
+    let step_paths: Vec<String> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .map(|e| {
+            // ct-print --full surfaces the source-mapping path under
+            // `path` for each step (already strip-paths normalised).
+            e["path"]
+                .as_str()
+                .expect("step.path str")
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(
+        step_paths,
+        vec![
+            // Implicit start step (writer-emitted) at the entry source.
+            "contracts_imports_test.cdc".to_string(),
+            // line 28 of the entry: dispatch into ContractA.foo.
+            "contracts_imports_test.cdc".to_string(),
+            // ContractA.foo body: imported source surfaces verbatim.
+            "contracts_imports_test_a.cdc".to_string(),
+            // line 29 of the entry: dispatch into ContractB.bar.
+            "contracts_imports_test.cdc".to_string(),
+            // ContractB.bar body: imported source surfaces verbatim.
+            "contracts_imports_test_b.cdc".to_string(),
+            // line 30 of the entry: aggregator return.
+            "contracts_imports_test.cdc".to_string(),
+        ],
+        "Each step's source-mapping path matches the helper-side `file` \
+         dispatch — the imported contract bodies land against their own \
+         sibling fixture paths, surfacing import resolution end-to-end."
+    );
+
+    // ----- Returns: ContractA.foo=11, ContractB.bar=22, main=33 ------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(11), Some(22), Some(33)]
+    );
+
+    // ----- Locals: x=11, y=22 ----------------------------------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["x", "y"]),
+        vec![("x".into(), 11), ("y".into(), 22)]
+    );
+}
+
+// --- fixed_point_test.cdc ------------------------------------------------
+
+const FIXED_POINT_NDJSON: &str = include_str!("ndjson/fixed_point_test.ndjson");
+
+/// Pins Cadence `Fix64` / `UFix64` fixed-point arithmetic.
+///
+/// Each fixed-point local surfaces as `ValueRecord::Int` carrying the
+/// canonical 1e8-scaled integer payload (Cadence stores fixed-point
+/// values internally as `int64 = value * 10^8`).  The scaling factor
+/// is captured implicitly via the type-id metadata (`Fix64` / `UFix64`
+/// lang_type names — distinct from the plain `Int` type-id), so
+/// downstream tooling can recover the decimal form by dividing by 1e8
+/// when the type-id metadata says the value is `Fix64`/`UFix64`.
+///
+/// Recorder change: `value_record` learned a dedicated `Fix64` /
+/// `UFix64` dispatch that parses the printed decimal form
+/// (`"-1.5"`, `"0.25"`, ...) into the scaled integer (via the new
+/// `parse_fixed_point_scaled` helper).  Closes the M9 known
+/// limitation that fractional decimals fell through to `Raw` — the
+/// `emit:Transfer.amount` strict pin in
+/// `test_events_emit_test_via_ct_print_full` was updated in the
+/// same commit to reflect the new typed shape.
+#[test]
+fn test_fixed_point_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_fixed_point_test_via_ct_print_full",
+        "fixed_point_test.cdc",
+        FIXED_POINT_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 8 explicit step events; the implicit start-step coalesces with
+    // the first explicit step (same source-line) so the writer emits
+    // 8 step records total.
+    assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
+    // main + compute = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // No io_events: fixed-point locals are pure typed scalars.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 8 steps + 2 call_entry + 2 call_exit + 0 io = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each Fix64 / UFix64 local decodes as a scaled Int ---------
+    // Per Cadence's internal representation, every fixed-point value
+    // is an int64 = decimal * 10^8.  We assert the scaled integer
+    // form for each local across negative / unsigned / mixed-sign /
+    // same-sign arithmetic.
+    let scaled_locals: Vec<(String, i64)> = doc["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .filter_map(|v| {
+            let name = v["varname"].as_str()?.to_string();
+            if !matches!(name.as_str(), "f" | "u" | "prod" | "sum") {
+                return None;
+            }
+            assert_eq!(
+                v["value"]["kind"].as_str(),
+                Some("Int"),
+                "fixed-point local `{}` must decode as a 1e8-scaled \
+                 ValueRecord::Int (Cadence stores Fix64/UFix64 as \
+                 int64 * 10^8); got {}",
+                name,
+                v["value"]
+            );
+            Some((name, v["value"]["i"].as_i64()?))
+        })
+        .collect();
+    assert_eq!(
+        scaled_locals,
+        vec![
+            // -1.5 : Fix64 → -1.5 * 10^8 = -150_000_000
+            ("f".into(), -150_000_000),
+            // 0.25 : UFix64 → 0.25 * 10^8 = 25_000_000
+            ("u".into(), 25_000_000),
+            // -1.5 * 0.25 = -0.375 : Fix64 → -37_500_000
+            ("prod".into(), -37_500_000),
+            // 0.25 + 1.0 = 1.25 : UFix64 → 125_000_000
+            ("sum".into(), 125_000_000),
+        ],
+        "Each fixed-point local decodes to its canonical 1e8-scaled \
+         integer; arithmetic results match the expected scaled values."
+    );
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
 }

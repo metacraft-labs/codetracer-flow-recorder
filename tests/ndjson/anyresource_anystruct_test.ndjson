@@ -1,0 +1,23 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":56}
+{"type":"call","name":"compute"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":48}
+{"type":"resource_create","resource_type":"Vault","uuid":8001,"owner":"alice","file":"anyresource_anystruct_test.cdc","line":48}
+{"type":"variable","name":"v","value":"@Vault#8001@alice","cadence_type":"@Vault"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":49}
+{"type":"call","name":"store","args":[{"name":"r","value":"@Vault#8001@alice","cadence_type":"@Vault"}]}
+{"type":"any_type_bind","static_type":"AnyResource","runtime_type":"Vault","varname":"r"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":40}
+{"type":"resource_destroy","resource_type":"Vault","uuid":8001,"owner":"alice","file":"anyresource_anystruct_test.cdc","line":40}
+{"type":"return","value":"","cadence_type":"Void"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":50}
+{"type":"variable","name":"t","value":"Token(id: 9)","cadence_type":"Token"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":51}
+{"type":"call","name":"process","args":[{"name":"s","value":"Token(id: 9)","cadence_type":"Token"}]}
+{"type":"any_type_bind","static_type":"AnyStruct","runtime_type":"Token","varname":"s"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":44}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":52}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"anyresource_anystruct_test.cdc","line":57}
+{"type":"return","value":"0","cadence_type":"Int"}

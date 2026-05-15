@@ -1,0 +1,13 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"path_types_test.cdc","line":29}
+{"type":"call","name":"compute"}
+{"type":"step","file":"path_types_test.cdc","line":22}
+{"type":"variable","name":"p1","value":"/storage/Vault","cadence_type":"StoragePath"}
+{"type":"step","file":"path_types_test.cdc","line":23}
+{"type":"variable","name":"p2","value":"/public/Vault","cadence_type":"PublicPath"}
+{"type":"step","file":"path_types_test.cdc","line":24}
+{"type":"variable","name":"p3","value":"/private/Vault","cadence_type":"PrivatePath"}
+{"type":"step","file":"path_types_test.cdc","line":25}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"path_types_test.cdc","line":30}
+{"type":"return","value":"0","cadence_type":"Int"}
