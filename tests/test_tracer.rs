@@ -5229,3 +5229,759 @@ fn test_fixed_point_test_via_ct_print_full() {
     // ----- Returns: compute=0, main=0 --------------------------------
     assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
 }
+
+// ---------------------------------------------------------------------------
+// M10 Round 5 fixtures: string_operations / byte_arrays /
+//                       crypto_signatures / type_aliases / attachments /
+//                       multi_test_entry
+// ---------------------------------------------------------------------------
+//
+// Round 4 closed the high-priority Cadence composite-typing deliverables
+// (path_types, fixed_point, contracts_imports, composite_types,
+// anyresource_anystruct).  Round 5 closes the remaining M10 fixture
+// backlog:
+//
+//   * `string_operations_test`  — `.concat` / `.slice` / `.utf8` /
+//                                 `.length` round-trip with typed
+//                                 `ValueRecord::String` and typed
+//                                 `Sequence<UInt8>` payloads.
+//   * `byte_arrays_test`        — `[UInt8]` byte arrays surface as
+//                                 `ValueRecord::Sequence<Int>` with
+//                                 the canonical 0xDE 0xAD 0xBE 0xEF
+//                                 payload preserved end-to-end.
+//   * `crypto_signatures_test`  — `PublicKey.verify` Call/Return pair
+//                                 with the boolean result surfaced as
+//                                 `ValueRecord::Bool`.
+//   * `type_aliases_test`       — Cadence 1.x `type alias` surfaces
+//                                 via a tagged `CadenceTypeAlias:
+//                                 <Alias>:<Underlying>` io_event.
+//   * `attachments_test`        — Cadence 1.x attachment
+//                                 attach/remove pair surfaces via the
+//                                 paired `CadenceAttachmentAttach:` /
+//                                 `CadenceAttachmentRemove:` tags.
+//   * `multi_test_entry_test`   — Multiple top-level entry points each
+//                                 produce an independent Function in
+//                                 the function table and an isolated
+//                                 call subtree in the trace.
+
+// --- string_operations_test.cdc ----------------------------------------
+
+const STRING_OPERATIONS_NDJSON: &str = include_str!("ndjson/string_operations_test.ndjson");
+
+/// Pins the Cadence `String` method surface beyond construction.
+///
+/// `concat` / `slice` / `utf8` / `length` each surface as a Call/Return
+/// pair where:
+///
+///   * The input `self` argument decodes as `ValueRecord::String`
+///     carrying the source string verbatim.
+///   * String-returning methods (`concat`, `slice`) produce a typed
+///     `ValueRecord::String` return; `.utf8` produces a typed
+///     `ValueRecord::Sequence<Int>` over the UTF-8 byte payload;
+///     `.length` produces a typed `ValueRecord::Int`.
+///   * The locals (`s`, `greeted`, `mid`, `bytes`, `len`) carry the
+///     same typed shapes so the locals pane and the call frames agree
+///     end-to-end.
+///
+/// No recorder change required — the existing `Some("String")` and
+/// `[UInt8]` branches in `value_record` already surface the required
+/// typed variants.
+#[test]
+fn test_string_operations_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_string_operations_test_via_ct_print_full",
+        "string_operations_test.cdc",
+        STRING_OPERATIONS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "main",
+            "compute",
+            "String.concat",
+            "String.slice",
+            "String.utf8",
+            "String.length",
+        ]
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 8 explicit step events + 1 implicit start step = 9 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
+    // main + compute + 4 String methods = 6 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    // No io_events (String methods are pure).
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 9 steps + 6 call_entry + 6 call_exit + 0 io = 21 events.
+    assert_eq!(events.len(), 21, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering: each method invoked exactly once -----------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "String.concat".to_string(),
+            "String.slice".to_string(),
+            "String.utf8".to_string(),
+            "String.length".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "String.concat".to_string(),
+            "String.slice".to_string(),
+            "String.utf8".to_string(),
+            "String.length".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+        ]
+    );
+
+    // ----- String locals decode as ValueRecord::String ---------------
+    assert_eq!(
+        observed_string_var_sequence(&doc, &["s", "greeted", "mid"]),
+        vec![
+            ("s".into(), "hello".into()),
+            ("greeted".into(), "hello world".into()),
+            ("mid".into(), "ell".into()),
+        ]
+    );
+
+    // ----- bytes local decodes as Sequence<Int> over UTF-8 payload ---
+    let bytes_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "bytes")
+        .expect("bytes local should be present");
+    assert_eq!(bytes_var["value"]["kind"].as_str(), Some("Sequence"));
+    let bytes_int: Vec<i64> = bytes_var["value"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    // "hello" = [0x68, 0x65, 0x6c, 0x6c, 0x6f] = [104, 101, 108, 108, 111]
+    assert_eq!(bytes_int, vec![104, 101, 108, 108, 111]);
+
+    // ----- len local decodes as ValueRecord::Int = 5 -----------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["len"]),
+        vec![("len".into(), 5)]
+    );
+
+    // ----- Per-method return values pinned ---------------------------
+    let returns: Vec<(String, serde_json::Value)> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .map(|e| {
+            (
+                e["function"].as_str().unwrap_or("?").to_string(),
+                e["return_value"].clone(),
+            )
+        })
+        .collect();
+    assert_eq!(returns.len(), 6);
+
+    // String.concat → "hello world"
+    assert_eq!(returns[0].0, "String.concat");
+    assert_eq!(returns[0].1["kind"].as_str(), Some("String"));
+    assert_eq!(returns[0].1["text"].as_str(), Some("hello world"));
+
+    // String.slice → "ell"
+    assert_eq!(returns[1].0, "String.slice");
+    assert_eq!(returns[1].1["kind"].as_str(), Some("String"));
+    assert_eq!(returns[1].1["text"].as_str(), Some("ell"));
+
+    // String.utf8 → Sequence<Int> over UTF-8 bytes
+    assert_eq!(returns[2].0, "String.utf8");
+    assert_eq!(returns[2].1["kind"].as_str(), Some("Sequence"));
+    let utf8_bytes: Vec<i64> = returns[2].1["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(utf8_bytes, vec![104, 101, 108, 108, 111]);
+
+    // String.length → Int 5
+    assert_eq!(returns[3].0, "String.length");
+    assert_eq!(returns[3].1["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[3].1["i"].as_i64(), Some(5));
+
+    // compute and main return Int 5 (the .length value)
+    assert_eq!(returns[4].0, "compute");
+    assert_eq!(returns[4].1["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[4].1["i"].as_i64(), Some(5));
+    assert_eq!(returns[5].0, "main");
+    assert_eq!(returns[5].1["kind"].as_str(), Some("Int"));
+    assert_eq!(returns[5].1["i"].as_i64(), Some(5));
+}
+
+// --- byte_arrays_test.cdc ----------------------------------------------
+
+const BYTE_ARRAYS_NDJSON: &str = include_str!("ndjson/byte_arrays_test.ndjson");
+
+/// Pins Cadence `[UInt8]` byte-array surface.
+///
+/// The canonical hex-form constants `[0xDE, 0xAD, 0xBE, 0xEF]` (=
+/// `[222, 173, 190, 239]` in decimal) surface as
+/// `ValueRecord::Sequence<Int>` with each `UInt8` child as a typed
+/// `ValueRecord::Int` (per the `[T]` array branch in `value_record`).
+/// Element access (`bytes[0]`) returns a typed `ValueRecord::Int`
+/// matching the first element; `.length` returns a typed
+/// `ValueRecord::Int` of 4.
+#[test]
+fn test_byte_arrays_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_byte_arrays_test_via_ct_print_full",
+        "byte_arrays_test.cdc",
+        BYTE_ARRAYS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 5 explicit step events + 1 implicit start step + 1 trailing
+    // entry-call same-source-line marker = 7 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
+    // main + compute = 2 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 7 steps + 2 call_entry + 2 call_exit + 0 io = 11 events.
+    assert_eq!(events.len(), 11, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- bytes local: Sequence<Int> over [0xDE, 0xAD, 0xBE, 0xEF] --
+    let bytes_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "bytes")
+        .expect("bytes local should be present");
+    assert_eq!(bytes_var["value"]["kind"].as_str(), Some("Sequence"));
+    let bytes_int: Vec<i64> = bytes_var["value"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(bytes_int, vec![0xDE, 0xAD, 0xBE, 0xEF]);
+
+    // ----- first / n locals decode as typed ValueRecord::Int ---------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["first", "n"]),
+        vec![("first".into(), 0xDE), ("n".into(), 4)]
+    );
+
+    // ----- Returns: compute=4, main=4 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(4), Some(4)]);
+}
+
+// --- crypto_signatures_test.cdc ----------------------------------------
+
+const CRYPTO_SIGNATURES_NDJSON: &str = include_str!("ndjson/crypto_signatures_test.ndjson");
+
+/// Pins the Cadence `PublicKey.verify` signature-verification surface.
+///
+/// The verify call surfaces as a Call/Return pair where the result
+/// decodes as a typed `ValueRecord::Bool` (NOT a stringified `Raw`).
+/// The four named arguments (`signature`, `signedData`,
+/// `domainSeparationTag`, `hashAlgorithm`) surface with their declared
+/// typed shapes — byte arrays as `Sequence<Int>`, the tag as
+/// `String`, and the algorithm as `Variant`.
+///
+/// No recorder change required — the existing `Bool` / `String` /
+/// `[UInt8]` / `enum:` branches in `value_record` already surface the
+/// required typed variants.
+#[test]
+fn test_crypto_signatures_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_crypto_signatures_test_via_ct_print_full",
+        "crypto_signatures_test.cdc",
+        CRYPTO_SIGNATURES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute", "PublicKey.verify"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 5 explicit step events + 1 implicit start step = 6 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
+    // main + compute + PublicKey.verify = 3 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 6 steps + 3 call_entry + 3 call_exit + 0 io = 12 events.
+    assert_eq!(events.len(), 12, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Call ordering ---------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "main".to_string(),
+            "compute".to_string(),
+            "PublicKey.verify".to_string(),
+        ]
+    );
+
+    // ----- PublicKey.verify call args pinned (4 typed args) ----------
+    let verify_call = events
+        .iter()
+        .find(|e| e["kind"] == "call_entry" && e["function"] == "PublicKey.verify")
+        .expect("PublicKey.verify call_entry should be present");
+    let args = verify_call["args"].as_array().expect("verify.args array");
+    assert_eq!(args.len(), 4);
+
+    // signature: [UInt8] → Sequence<Int> [4, 5, 6]
+    assert_eq!(args[0]["varname"].as_str(), Some("signature"));
+    assert_eq!(args[0]["value"]["kind"].as_str(), Some("Sequence"));
+    let sig_bytes: Vec<i64> = args[0]["value"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(sig_bytes, vec![4, 5, 6]);
+
+    // signedData: [UInt8] → Sequence<Int> [7, 8, 9]
+    assert_eq!(args[1]["varname"].as_str(), Some("signedData"));
+    assert_eq!(args[1]["value"]["kind"].as_str(), Some("Sequence"));
+    let signed_bytes: Vec<i64> = args[1]["value"]["elements"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| {
+            assert_eq!(e["kind"].as_str(), Some("Int"));
+            e["i"].as_i64().unwrap()
+        })
+        .collect();
+    assert_eq!(signed_bytes, vec![7, 8, 9]);
+
+    // domainSeparationTag: String → ValueRecord::String "FLOW"
+    assert_eq!(args[2]["varname"].as_str(), Some("domainSeparationTag"));
+    assert_eq!(args[2]["value"]["kind"].as_str(), Some("String"));
+    assert_eq!(args[2]["value"]["text"].as_str(), Some("FLOW"));
+
+    // hashAlgorithm: enum:HashAlgorithm:UInt8 → Variant SHA2_256
+    assert_eq!(args[3]["varname"].as_str(), Some("hashAlgorithm"));
+    assert_eq!(args[3]["value"]["kind"].as_str(), Some("Variant"));
+    assert_eq!(
+        args[3]["value"]["discriminator"].as_str(),
+        Some("SHA2_256")
+    );
+
+    // ----- verify result: ValueRecord::Bool true ---------------------
+    let verify_exit = events
+        .iter()
+        .find(|e| e["kind"] == "call_exit" && e["function"] == "PublicKey.verify")
+        .expect("PublicKey.verify call_exit should be present");
+    let rv = &verify_exit["return_value"];
+    assert_eq!(rv["kind"].as_str(), Some("Bool"));
+    assert_eq!(rv["b"].as_bool(), Some(true));
+
+    // ----- ok local: ValueRecord::Bool true --------------------------
+    let ok_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "ok")
+        .expect("ok local should be present");
+    assert_eq!(ok_var["value"]["kind"].as_str(), Some("Bool"));
+    assert_eq!(ok_var["value"]["b"].as_bool(), Some(true));
+
+    // ----- compute and main returns: ValueRecord::Bool true ----------
+    let outer_returns: Vec<bool> = events
+        .iter()
+        .filter(|e| e["kind"] == "call_exit")
+        .filter(|e| {
+            let f = e["function"].as_str().unwrap_or("");
+            f == "compute" || f == "main"
+        })
+        .map(|e| {
+            let rv = &e["return_value"];
+            assert_eq!(rv["kind"].as_str(), Some("Bool"));
+            rv["b"].as_bool().unwrap()
+        })
+        .collect();
+    assert_eq!(outer_returns, vec![true, true]);
+}
+
+// --- type_aliases_test.cdc ---------------------------------------------
+
+const TYPE_ALIASES_NDJSON: &str = include_str!("ndjson/type_aliases_test.ndjson");
+
+/// Pins Cadence 1.x `type alias` declaration metadata.
+///
+/// The alias surfaces as a tagged `CadenceTypeAlias:<Alias>:
+/// <Underlying>` io_event so downstream consumers can resolve aliases
+/// to their underlying types on the io-event channel without
+/// re-parsing the source.  Values declared with the alias type carry
+/// the underlying type's typed `ValueRecord` variant — here `UFix64`
+/// surfaces as the canonical 1e8-scaled `ValueRecord::Int`.
+///
+/// Recorder change: a new `TraceEvent::TypeAlias { alias_name,
+/// underlying_type }` variant routes through `register_special_event`
+/// with the canonical `CadenceTypeAlias:<Alias>:<Underlying>` tag.
+#[test]
+fn test_type_aliases_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_type_aliases_test_via_ct_print_full",
+        "type_aliases_test.cdc",
+        TYPE_ALIASES_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 4 explicit step events + 1 implicit start step = 5 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(5), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // 1 type-alias io_event.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(1),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 5 steps + 2 call_entry + 2 call_exit + 1 io = 10 events.
+    assert_eq!(events.len(), 10, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Tagged CadenceTypeAlias io_event --------------------------
+    let alias_tags: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .filter_map(|e| {
+            let text = e["text"].as_str()?;
+            if !text.starts_with("CadenceTypeAlias:") {
+                return None;
+            }
+            Some((e["io_kind"].as_str().unwrap_or("?"), text))
+        })
+        .collect();
+    assert_eq!(
+        alias_tags,
+        vec![("ioStderr", "CadenceTypeAlias:Coin:UFix64")],
+        "Type alias surfaces as a tagged CadenceTypeAlias:<Alias>:\
+         <Underlying> io_event so downstream consumers can resolve \
+         the alias → underlying linkage without re-parsing the source."
+    );
+
+    // ----- amount local decodes as the underlying type's ValueRecord -
+    // UFix64 1.5 surfaces as the canonical 1e8-scaled Int 150_000_000.
+    let amount_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "amount")
+        .expect("amount local should be present");
+    assert_eq!(
+        amount_var["value"]["kind"].as_str(),
+        Some("Int"),
+        "alias-typed local must surface as the underlying UFix64 \
+         type's typed Int (1e8-scaled); got {}",
+        amount_var["value"]
+    );
+    assert_eq!(amount_var["value"]["i"].as_i64(), Some(150_000_000));
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- attachments_test.cdc ----------------------------------------------
+
+const ATTACHMENTS_NDJSON: &str = include_str!("ndjson/attachments_test.ndjson");
+
+/// Pins Cadence 1.x attachment attach/remove surface.
+///
+/// Each attach surfaces as a tagged `CadenceAttachmentAttach:<Att>:
+/// <Target>` io_event; each remove surfaces as the symmetric
+/// `CadenceAttachmentRemove:<Att>:<Target>` tag.  The attached value
+/// itself surfaces as a typed `ValueRecord::Struct` whose type-id
+/// carries the `<Att>@<Target>` attachment-target metadata so
+/// downstream tooling can correlate the typed local with the attach
+/// site.
+///
+/// Recorder change: two new variants `TraceEvent::AttachmentAttach`
+/// and `TraceEvent::AttachmentRemove` route through
+/// `register_special_event` with the canonical attach/remove tags.
+#[test]
+fn test_attachments_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_attachments_test_via_ct_print_full",
+        "attachments_test.cdc",
+        ATTACHMENTS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table --------------------------------------------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(functions, vec!["main", "compute"]);
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 7 explicit step events plus 2 implicit steps emitted by the
+    // resource_create / resource_destroy lifecycle records (each
+    // routes through `register_step` ahead of the per-resource
+    // typed local) = 9 step records.
+    assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    // resource_create + resource_destroy + attach + remove = 4 io_events.
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(4),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 9 steps + 2 call_entry + 2 call_exit + 4 io = 17 events.
+    assert_eq!(events.len(), 17, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Tagged attachment io_events (attach / remove pair) --------
+    let attachment_tags: Vec<(&str, &str)> = events
+        .iter()
+        .filter(|e| e["kind"] == "io")
+        .filter_map(|e| {
+            let text = e["text"].as_str()?;
+            if !text.starts_with("CadenceAttachment") {
+                return None;
+            }
+            Some((e["io_kind"].as_str().unwrap_or("?"), text))
+        })
+        .collect();
+    assert_eq!(
+        attachment_tags,
+        vec![
+            ("ioStderr", "CadenceAttachmentAttach:Logger:Vault"),
+            ("ioStderr", "CadenceAttachmentRemove:Logger:Vault"),
+        ],
+        "Each attach site surfaces with its `CadenceAttachmentAttach:\
+         <Att>:<Target>` tag; each remove with the symmetric \
+         `CadenceAttachmentRemove:` tag, in attach → remove order."
+    );
+
+    // ----- attached local decodes as ValueRecord::Struct -------------
+    // The `Logger@Vault` cadence_type carries the attachment-target
+    // metadata in the type-id; the value `Logger(label: primary)`
+    // parses through the named-struct branch so the typed Struct
+    // carries the `label` field as a typed leaf.
+    let attached_var = events
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .flat_map(|e| e["vars"].as_array().cloned().unwrap_or_default())
+        .find(|v| v["varname"] == "attached")
+        .expect("attached local should be present");
+    assert_eq!(
+        attached_var["value"]["kind"].as_str(),
+        Some("Struct"),
+        "Attachment local must surface as a typed Struct with \
+         `<Att>@<Target>` type-id metadata; got {}",
+        attached_var["value"]
+    );
+    let attached_fields = attached_var["value"]["field_values"]
+        .as_array()
+        .expect("attached.field_values");
+    // Logger(label: primary) → 1 typed field.
+    assert_eq!(attached_fields.len(), 1);
+    assert_eq!(attached_fields[0]["kind"].as_str(), Some("String"));
+    assert_eq!(attached_fields[0]["text"].as_str(), Some("primary"));
+
+    // ----- Returns: compute=0, main=0 --------------------------------
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+}
+
+// --- multi_test_entry_test.cdc -----------------------------------------
+
+const MULTI_TEST_ENTRY_NDJSON: &str = include_str!("ndjson/multi_test_entry_test.ndjson");
+
+/// Pins multiple top-level entry-point functions in a single fixture.
+///
+/// The recorder must process each top-level entry as an independent
+/// Function in the function table so the call subtree for each entry
+/// stays isolated from the others.  This fixture exercises three
+/// disjoint top-level functions (`testFoo` / `testBar` / `testBaz`)
+/// each calling its own helper, and pins:
+///
+///   * The function table contains all 6 functions in declaration
+///     order (3 helpers + 3 entries).
+///   * Each entry's call subtree appears as an independent Call/Return
+///     pair in event-emission order — the recorder processes them in
+///     declaration order without cross-contaminating arg/local frames.
+///   * The returns chain: `helperFoo`/`testFoo`=1, `helperBar`/
+///     `testBar`=2, `helperBaz`/`testBaz`=3.
+#[test]
+fn test_multi_test_entry_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_multi_test_entry_test_via_ct_print_full",
+        "multi_test_entry_test.cdc",
+        MULTI_TEST_ENTRY_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // ----- Function table: all 6 entries / helpers visible -----------
+    let functions: Vec<&str> = doc["functions"]
+        .as_array()
+        .expect("functions array")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert_eq!(
+        functions,
+        vec![
+            "testFoo", "helperFoo", "testBar", "helperBar", "testBaz", "helperBaz",
+        ],
+        "Each top-level entry-point AND its helper must appear as an \
+         independent Function in the function table — no cross-\
+         contamination across entries."
+    );
+
+    // ----- counts -----------------------------------------------------
+    let counts = &doc["counts"];
+    // 9 explicit step events + 1 implicit start step at the entry.
+    assert_eq!(
+        counts["steps"].as_u64(),
+        Some(10),
+        "steps; counts={counts}"
+    );
+    // 3 entries + 3 helpers = 6 calls.
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    assert_eq!(
+        counts["io_events"].as_u64(),
+        Some(0),
+        "io_events; counts={counts}"
+    );
+
+    let events = doc["events"].as_array().expect("events array");
+    // 10 steps + 6 call_entry + 6 call_exit + 0 io = 22 events.
+    assert_eq!(events.len(), 22, "events.len()");
+    assert_step_indices_monotonic(&doc);
+
+    // ----- Each entry's call subtree is independent and ordered ------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "testFoo".to_string(),
+            "helperFoo".to_string(),
+            "testBar".to_string(),
+            "helperBar".to_string(),
+            "testBaz".to_string(),
+            "helperBaz".to_string(),
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "helperFoo".to_string(),
+            "testFoo".to_string(),
+            "helperBar".to_string(),
+            "testBar".to_string(),
+            "helperBaz".to_string(),
+            "testBaz".to_string(),
+        ]
+    );
+
+    // ----- Per-entry return values pinned ----------------------------
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
+        "Each entry's helper returns its index (1/2/3); the entry \
+         passes the helper's return through unchanged so each subtree \
+         exits with the same Int payload."
+    );
+}
+

@@ -1,0 +1,16 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"attachments_test.cdc","line":54}
+{"type":"call","name":"compute"}
+{"type":"step","file":"attachments_test.cdc","line":47}
+{"type":"resource_create","resource_type":"Vault","uuid":9001,"owner":"alice","file":"attachments_test.cdc","line":47}
+{"type":"variable","name":"v","value":"@Vault#9001@alice","cadence_type":"@Vault"}
+{"type":"step","file":"attachments_test.cdc","line":48}
+{"type":"attachment_attach","attachment_type":"Logger","target_type":"Vault"}
+{"type":"variable","name":"attached","value":"Logger(label: primary)","cadence_type":"Logger@Vault"}
+{"type":"step","file":"attachments_test.cdc","line":49}
+{"type":"attachment_remove","attachment_type":"Logger","target_type":"Vault"}
+{"type":"resource_destroy","resource_type":"Vault","uuid":9001,"owner":"alice","file":"attachments_test.cdc","line":49}
+{"type":"step","file":"attachments_test.cdc","line":50}
+{"type":"return","value":"0","cadence_type":"Int"}
+{"type":"step","file":"attachments_test.cdc","line":55}
+{"type":"return","value":"0","cadence_type":"Int"}
