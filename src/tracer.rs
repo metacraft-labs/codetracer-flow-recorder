@@ -1766,19 +1766,71 @@ impl CadenceTracer {
                     }
                 }
             }
-            // No (or unknown) `cadence_type` discriminator: best-effort
-            // numeric parse, otherwise leave as a stringified Raw so the
-            // ct-print decoder treats the bytes as opaque rather than as
-            // a typed String.
+            // No (or unknown) `cadence_type` discriminator.  Best-effort
+            // shape recognition from the value text:
+            //
+            //   * `[...]`  surfaces as `ValueRecord::Sequence` with each
+            //              element decoded recursively (no inner-type
+            //              hint, so leaves fall through this same arm).
+            //   * `{...}`  surfaces as `ValueRecord::Sequence` of
+            //              `Tuple { key, value }` pairs, matching the
+            //              typed-dict shape used by the
+            //              `Some(t) if t.starts_with('{')` branch.
+            //   * numeric  surfaces as `ValueRecord::Int { i }`.
+            //
+            // Only genuinely unrecognised payloads fall through to the
+            // residual `Raw` representation so the ct-print decoder
+            // treats the bytes as opaque rather than as a typed String.
+            // This closes the long-standing recorder bug where Cadence
+            // array / dict literals reaching the recorder without a
+            // `cadence_type` discriminator were forced into
+            // `ValueRecord::Raw`.
             _ => {
                 let lang = trimmed_type.unwrap_or("Int");
-                let type_id = self.ensure_type(TypeKind::Int, lang);
-                if let Ok(i) = value.parse::<i64>() {
-                    ValueRecord::Int { i, type_id }
+                let v = value.trim();
+                if v.starts_with('[') && v.ends_with(']') && v.len() >= 2 {
+                    let seq_id = self.ensure_type(TypeKind::Seq, "[]");
+                    let elements = parse_cadence_array(value)
+                        .into_iter()
+                        .map(|elem| self.value_record(&elem, None))
+                        .collect();
+                    ValueRecord::Sequence {
+                        elements,
+                        is_slice: false,
+                        type_id: seq_id,
+                    }
+                } else if v.starts_with('{')
+                    && v.ends_with('}')
+                    && v.len() >= 2
+                    && (v == "{}" || v.contains(':'))
+                {
+                    let dict_id = self.ensure_type(TypeKind::Seq, "{}");
+                    let pair_id = self.ensure_type(TypeKind::Tuple, "DictEntry");
+                    let elements = parse_cadence_dict(value)
+                        .into_iter()
+                        .map(|(k, val)| {
+                            let key_value = self.value_record(&k, None);
+                            let val_value = self.value_record(&val, None);
+                            ValueRecord::Tuple {
+                                elements: vec![key_value, val_value],
+                                type_id: pair_id,
+                            }
+                        })
+                        .collect();
+                    ValueRecord::Sequence {
+                        elements,
+                        is_slice: false,
+                        type_id: dict_id,
+                    }
                 } else {
-                    ValueRecord::Raw {
-                        r: value.to_string(),
-                        type_id,
+                    let type_id = self.ensure_type(TypeKind::Int, lang);
+                    if let Ok(i) = value.parse::<i64>() {
+                        ValueRecord::Int { i, type_id }
+                    } else {
+                        ValueRecord::Raw {
+                            r: value.to_string(),
+                            type_id,
+                        }
                     }
                 }
             }
