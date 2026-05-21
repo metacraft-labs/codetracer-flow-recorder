@@ -56,7 +56,7 @@ fn ct_print_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("codetracer-trace-format-nim")
-        .join("ct-print")
+        .join(format!("ct-print{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn flow_test_ndjson() -> &'static str {
@@ -5177,10 +5177,13 @@ fn test_contracts_imports_test_via_ct_print_full() {
         .map(|e| {
             // ct-print --full surfaces the source-mapping path under
             // `path` for each step (already strip-paths normalised).
+            // Split on both separators: the recorder resolves imported
+            // sibling fixtures with `Path::join`, which yields `\` on
+            // Windows and `/` on Unix.
             e["path"]
                 .as_str()
                 .expect("step.path str")
-                .rsplit('/')
+                .rsplit(['/', '\\'])
                 .next()
                 .unwrap()
                 .to_string()
