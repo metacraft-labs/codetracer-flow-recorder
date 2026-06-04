@@ -797,7 +797,8 @@ impl CadenceTracer {
 
         // -- 6. Finish writing --
         TraceWriter::finish_writing_trace_events(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
-        tracer.writer
+        tracer
+            .writer
             .write_meta_dat("codetracer-flow-recorder")
             .map_err(|e| eyre!("{e}"))?;
         tracer.writer.close().map_err(|e| eyre!("{e}"))?;
@@ -855,7 +856,8 @@ impl CadenceTracer {
 
         // Finish writing.
         TraceWriter::finish_writing_trace_events(&mut *tracer.writer).map_err(|e| eyre!("{e}"))?;
-        tracer.writer
+        tracer
+            .writer
             .write_meta_dat("codetracer-flow-recorder")
             .map_err(|e| eyre!("{e}"))?;
         tracer.writer.close().map_err(|e| eyre!("{e}"))?;
