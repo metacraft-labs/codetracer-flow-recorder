@@ -13,9 +13,9 @@ name: Cross-Repo Integration Tests
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, dev, stable]
   push:
-    branches: [main]
+    branches: [main, dev, stable]
 
   workflow_dispatch:
     inputs:
