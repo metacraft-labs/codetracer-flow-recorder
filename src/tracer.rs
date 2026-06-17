@@ -8,8 +8,8 @@
 //! environment variable.  When unset it defaults to `cadence-trace-helper`
 //! (looked up on `$PATH`).
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use codetracer_trace_types::{
@@ -35,7 +35,20 @@ use serde::Deserialize;
 #[serde(tag = "type")]
 pub enum TraceEvent {
     #[serde(rename = "step")]
-    Step { file: String, line: u32 },
+    Step {
+        file: String,
+        line: u32,
+        /// 1-based source column the step landed on, as emitted by
+        /// the Go helper after converting Cadence's 0-based
+        /// `ast.Position.Column`.  `None` when the helper omits the
+        /// field (legacy NDJSON without column info) — in that case
+        /// the recorder still emits a column-aware step but with
+        /// `column = None`, per the column-aware mode contract
+        /// (`enable_column_aware_steps` is sticky; readers fall
+        /// back to a `None` column for individual steps).
+        #[serde(default)]
+        column: Option<u32>,
+    },
     #[serde(rename = "variable")]
     Variable {
         name: String,
@@ -110,6 +123,9 @@ pub enum TraceEvent {
         owner: String,
         file: String,
         line: u32,
+        /// 1-based source column, optional.  See `Step::column`.
+        #[serde(default)]
+        column: Option<u32>,
     },
 
     #[serde(rename = "resource_move")]
@@ -120,6 +136,9 @@ pub enum TraceEvent {
         to_owner: String,
         file: String,
         line: u32,
+        /// 1-based source column, optional.  See `Step::column`.
+        #[serde(default)]
+        column: Option<u32>,
     },
 
     #[serde(rename = "resource_destroy")]
@@ -129,6 +148,9 @@ pub enum TraceEvent {
         owner: String,
         file: String,
         line: u32,
+        /// 1-based source column, optional.  See `Step::column`.
+        #[serde(default)]
+        column: Option<u32>,
     },
 
     // ----- M10 events -----
@@ -149,6 +171,9 @@ pub enum TraceEvent {
         to_owner: String,
         file: String,
         line: u32,
+        /// 1-based source column, optional.  See `Step::column`.
+        #[serde(default)]
+        column: Option<u32>,
     },
 
     /// Force-unwrap of a `nil` optional (`foo!` over `nil`).  Surfaces
@@ -736,9 +761,84 @@ pub struct CadenceTracer {
     /// to CBOR ourselves and routing it through `register_variable_cbor`
     /// preserves the typed `ValueRecord` variant tag end-to-end.
     streaming_encoder: StreamingValueEncoder,
+    /// FU-Column-Aware-Nav-Flow: paths already registered with their
+    /// per-line UTF-8 byte-length tables via
+    /// `register_path_with_line_lengths`.  Tracked so we only emit the
+    /// `paths.dat` Layout A record once per source file (the first
+    /// registration wins per the Nim writer's semantics — a later
+    /// re-registration for an already-interned path is silently
+    /// dropped, which would lose the line-length table the
+    /// column-aware reader needs to map global positions back to
+    /// (line, column)).  Mirrors the EVM recorder's
+    /// `paths_with_line_lengths` set.
+    paths_with_line_lengths: HashSet<PathBuf>,
+}
+
+/// FU-Column-Aware-Nav-Flow: compute the per-line UTF-8 byte-length
+/// table required by the `paths.dat` Layout A record (column-aware
+/// mode).  `line_lengths[i]` is the byte count of source line `i+1`
+/// (1-based, matching the CTFS spec), excluding the trailing `\n`.  A
+/// file that doesn't end with `\n` still has its final line counted.
+/// Identical algorithm to the EVM / Cairo recorders'
+/// `compute_line_lengths` helper — extracted here so the Flow
+/// recorder can register multi-file (imported) Cadence sources.
+fn compute_line_lengths(source: &str) -> Vec<u32> {
+    let mut lengths: Vec<u32> = Vec::new();
+    let mut line_start: usize = 0;
+    for (i, b) in source.bytes().enumerate() {
+        if b == b'\n' {
+            lengths.push((i - line_start) as u32);
+            line_start = i + 1;
+        }
+    }
+    if line_start < source.len() {
+        lengths.push((source.len() - line_start) as u32);
+    }
+    lengths
 }
 
 impl CadenceTracer {
+    /// FU-Column-Aware-Nav-Flow: register `path` with its per-line
+    /// UTF-8 byte-length table via the `paths.dat` Layout A entry
+    /// point, once per recorder lifetime.  Subsequent calls for the
+    /// same path are no-ops.
+    ///
+    /// Reads the source file from disk to compute the line lengths.
+    /// Soft-fails (logged to stderr) if the file can't be read or
+    /// the FFI rejects the call — the trace remains usable, but
+    /// columns on that file fall back to `None` at read time.
+    /// Mirrors the EVM recorder's `ensure_path_with_line_lengths`.
+    fn ensure_path_with_line_lengths(&mut self, path: &Path) {
+        if self.paths_with_line_lengths.contains(path) {
+            return;
+        }
+        // Try to read the source from disk.  When the file isn't
+        // available (e.g. tests using synthetic NDJSON whose paths
+        // don't exist on the filesystem), register with an empty
+        // line-lengths slice so the path still gets the
+        // column-aware-compatible `paths.dat` record — the writer
+        // treats an empty slice as "no per-line data, fall back to
+        // None at read time" (see
+        // `NimTraceWriter::register_path_with_line_lengths`).
+        let line_lengths = match std::fs::read_to_string(path) {
+            Ok(src) => compute_line_lengths(&src),
+            Err(_) => Vec::new(),
+        };
+        if let Err(err) = TraceWriter::register_path_with_line_lengths(
+            &mut *self.writer,
+            path,
+            &line_lengths,
+        ) {
+            eprintln!(
+                "[codetracer-flow-recorder] register_path_with_line_lengths failed for {}: {} \
+                 (column resolution will fall back to None for this file)",
+                path.display(),
+                err,
+            );
+        }
+        self.paths_with_line_lengths.insert(path.to_path_buf());
+    }
+
     /// Trace a Cadence program and write a CodeTracer CTFS bundle.
     ///
     /// 1. Shells out to the Go helper to execute the program and capture
@@ -769,6 +869,7 @@ impl CadenceTracer {
             writer: create_trace_writer(&program_str, &[], format),
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
+            paths_with_line_lengths: HashSet::new(),
         };
 
         // -- 3. Initialise output files --
@@ -781,6 +882,30 @@ impl CadenceTracer {
 
         TraceWriter::begin_writing_trace_events(&mut *tracer.writer, &events_path)
             .map_err(|e| eyre!("{e}"))?;
+
+        // FU-Column-Aware-Nav-Flow: opt the canonical CTFS writer into
+        // column-aware step encoding *before* the first
+        // `register_step` / `start` call.  `enable_column_aware_steps`
+        // is sticky for the lifetime of the trace and gates the
+        // writer's `DeltaColumn` (tag 0x07) emission path plus the
+        // `meta.dat` bit 4 flag (`FLAG_HAS_COLUMN_AWARE_STEPS`).
+        // Even when individual steps resolve to `column == None`
+        // (e.g. the Go helper omitted the column field for some
+        // statement, or resource lifecycle events that don't carry a
+        // column), downstream readers rely on the flag to decide
+        // whether to surface a column field at all — mirrors the
+        // Solana / EVM / Cairo recorder contract.
+        TraceWriter::enable_column_aware_steps(&mut *tracer.writer);
+
+        // FU-Column-Aware-Nav-Flow: register the entry source path's
+        // per-line byte-length table BEFORE `TraceWriter::start`.
+        // `start` internally interns the path (without line-length
+        // data), and a later `register_path_with_line_lengths` for
+        // an already-interned path is silently dropped by the Nim
+        // writer — that drops the line-length table needed by the
+        // reader's `decodeGlobalPositionIndex`, so the per-step
+        // column field never surfaces in ct-print.
+        tracer.ensure_path_with_line_lengths(source_path);
 
         // -- 4. Start the trace --
         TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
@@ -828,6 +953,7 @@ impl CadenceTracer {
             writer: create_trace_writer(&program_str, &[], format),
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
+            paths_with_line_lengths: HashSet::new(),
         };
 
         // Initialise output files.
@@ -840,6 +966,12 @@ impl CadenceTracer {
 
         TraceWriter::begin_writing_trace_events(&mut *tracer.writer, &events_path)
             .map_err(|e| eyre!("{e}"))?;
+
+        // FU-Column-Aware-Nav-Flow: opt into column-aware encoding
+        // before the first `register_step` / `start` call.  See the
+        // matching block in `trace_program` for the full rationale.
+        TraceWriter::enable_column_aware_steps(&mut *tracer.writer);
+        tracer.ensure_path_with_line_lengths(source_path);
 
         // Start the trace.
         TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
@@ -879,7 +1011,17 @@ impl CadenceTracer {
             writer: Box::new(NonStreamingTraceWriter::new(&program_str, &[])),
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
+            paths_with_line_lengths: HashSet::new(),
         };
+
+        // FU-Column-Aware-Nav-Flow: even on the
+        // `NonStreamingTraceWriter` test double the trait's default
+        // `enable_column_aware_steps` / `register_path_with_line_lengths`
+        // impls are no-ops, but we keep the call shape uniform across
+        // all three `CadenceTracer` constructors so the column-aware
+        // contract is documented in one place.
+        TraceWriter::enable_column_aware_steps(&mut *tracer.writer);
+        tracer.ensure_path_with_line_lengths(source_path);
 
         TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
         for type_name in &["Int", "UInt64", "Fix64", "Bool", "String", "Address"] {
@@ -896,7 +1038,7 @@ impl CadenceTracer {
     fn convert_events(&mut self, source_path: &Path, events: &[TraceEvent]) -> Result<()> {
         for event in events {
             match event {
-                TraceEvent::Step { file, line } => {
+                TraceEvent::Step { file, line, column } => {
                     // Resolve the step's source path: if the helper-side
                     // `file` field is present and refers to a sibling
                     // fixture (a different file from the main entry-point
@@ -908,7 +1050,28 @@ impl CadenceTracer {
                     // source when `file` is empty or matches the entry
                     // file's basename.
                     let resolved = resolve_step_source_path(source_path, file);
-                    TraceWriter::register_step(&mut *self.writer, &resolved, Line(*line as i64));
+                    // FU-Column-Aware-Nav-Flow: register the imported
+                    // source's per-line byte-length table on first
+                    // contact before emitting the step.  See
+                    // `ensure_path_with_line_lengths` for the
+                    // already-interned / soft-fail contract.
+                    self.ensure_path_with_line_lengths(&resolved);
+                    // FU-Column-Aware-Nav-Flow: forward the helper-side
+                    // column (already 1-based — the Go helper applied
+                    // the `+ 1` adjustment from Cadence's 0-based
+                    // `ast.Position.Column`) verbatim through the
+                    // column-aware Step encoder.  When the helper
+                    // omits the column (legacy NDJSON without column
+                    // info) we pass `None` — `enable_column_aware_steps`
+                    // remains set, so the trace's column-aware flag
+                    // survives and individual steps with `None` fall
+                    // back cleanly at read time.
+                    TraceWriter::register_step_with_column(
+                        &mut *self.writer,
+                        &resolved,
+                        Line(*line as i64),
+                        column.map(|c| Line(c as i64)),
+                    );
                 }
                 TraceEvent::Variable {
                     name,
@@ -1023,9 +1186,20 @@ impl CadenceTracer {
                     owner,
                     file: _,
                     line,
+                    column,
                 } => {
-                    // Emit a step at the resource creation site.
-                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+                    // FU-Column-Aware-Nav-Flow: emit a column-aware
+                    // step at the resource creation site.  When the
+                    // helper omits the column (resource lifecycle
+                    // events that don't carry a column) we pass
+                    // `None` — the column-aware flag still surfaces
+                    // on the trace.
+                    TraceWriter::register_step_with_column(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                        column.map(|c| Line(c as i64)),
+                    );
 
                     // Synthesise the implicit `<Type>.init` Cadence
                     // initializer in the function table so the function
@@ -1075,9 +1249,16 @@ impl CadenceTracer {
                     to_owner,
                     file: _,
                     line,
+                    column,
                 } => {
-                    // Emit a step at the move site.
-                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+                    // FU-Column-Aware-Nav-Flow: column-aware step at
+                    // the move site.  See `ResourceCreate` above.
+                    TraceWriter::register_step_with_column(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                        column.map(|c| Line(c as i64)),
+                    );
 
                     // Emit the resource as a variable showing the ownership transfer.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -1103,9 +1284,16 @@ impl CadenceTracer {
                     owner,
                     file: _,
                     line,
+                    column,
                 } => {
-                    // Emit a step at the destroy site.
-                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+                    // FU-Column-Aware-Nav-Flow: column-aware step at
+                    // the destroy site.  See `ResourceCreate` above.
+                    TraceWriter::register_step_with_column(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                        column.map(|c| Line(c as i64)),
+                    );
 
                     // Emit the resource as a variable showing destruction.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -1133,10 +1321,19 @@ impl CadenceTracer {
                     to_owner,
                     file: _,
                     line,
+                    column,
                 } => {
-                    // Emit a step at the move site so the trace can
-                    // line the owner-change up against source.
-                    TraceWriter::register_step(&mut *self.writer, source_path, Line(*line as i64));
+                    // FU-Column-Aware-Nav-Flow: column-aware step at
+                    // the owner-change site so the trace can line the
+                    // ownership transition up against source.  See
+                    // `ResourceCreate` above for the `column = None`
+                    // contract.
+                    TraceWriter::register_step_with_column(
+                        &mut *self.writer,
+                        source_path,
+                        Line(*line as i64),
+                        column.map(|c| Line(c as i64)),
+                    );
 
                     // Tagged owner-change io event.  Multi-stream io
                     // writer drops the metadata field, so the
@@ -1928,6 +2125,7 @@ mod tests {
             TraceEvent::Step {
                 file: "test.cdc".to_string(),
                 line: 3,
+                column: None,
             }
         );
     }
@@ -2186,6 +2384,7 @@ mod tests {
                 owner: "0x01".to_string(),
                 file: "test.cdc".to_string(),
                 line: 5,
+                column: None,
             }
         );
     }
@@ -2204,6 +2403,7 @@ mod tests {
                 to_owner: "0x02".to_string(),
                 file: "test.cdc".to_string(),
                 line: 10,
+                column: None,
             }
         );
     }
@@ -2221,6 +2421,7 @@ mod tests {
                 owner: "0x02".to_string(),
                 file: "test.cdc".to_string(),
                 line: 15,
+                column: None,
             }
         );
     }
