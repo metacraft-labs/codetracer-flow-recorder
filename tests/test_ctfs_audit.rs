@@ -364,3 +364,149 @@ fn test_replay_on_chain_state_and_event_ndjson_routes_to_special_events() {
         "TokensDeposited(amount: 10.0, to: 0xReceiver)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// FU-Column-Aware-Nav-Flow: column-aware replay-navigation
+// ---------------------------------------------------------------------------
+
+/// Path to the `ct-print` binary shipped with `codetracer-trace-format-nim`.
+/// Mirrors `tests/test_tracer.rs::ct_print_path` so the column-aware test
+/// is co-located with the rest of the audit suite.
+fn ct_print_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("codetracer-trace-format-nim")
+        .join(format!("ct-print{}", std::env::consts::EXE_SUFFIX))
+}
+
+/// The Flow recorder must opt the CTFS writer into column-aware step
+/// encoding so that `meta.dat` bit 4 (`FLAG_HAS_COLUMN_AWARE_STEPS`)
+/// is set on every recorded trace.  Mirrors the Cairo recorder's
+/// `tests/test_column_aware.rs` deliverable and matches the JS / EVM
+/// / Solana sibling tests.
+///
+/// The fixture is the canonical column-aware NDJSON: two steps on the
+/// same source line at distinct 1-based columns.  We verify:
+///
+///   * `metadata.flags.has_column_aware_steps == true` in `ct-print --full`
+///     output (the meta.dat bit-4 flag).
+///   * At least one step event surfaces a non-null `column` field with a
+///     value distinct from another step on the same line (i.e. the
+///     column is actually round-tripping through the writer's
+///     `DeltaColumn` encoder).
+///
+/// When the helper-side column is absent we still set the flag — the
+/// stop-gap contract in the column-aware plan: "still emit flag +
+/// register_step_with_column(None)".  This test exercises the
+/// columns-present path; the columns-absent path is covered by the
+/// existing tests above (which all pass after this change).
+///
+/// Skips gracefully when `ct-print` is not available (mirrors
+/// `test_recorded_trace_via_ct_print_json`).
+#[test]
+fn test_column_aware_steps_flag_and_distinct_columns() {
+    let ct_print = ct_print_path();
+    if !ct_print.exists() {
+        eprintln!(
+            "SKIP: ct-print not found at {} — only available within the \
+             metacraft workspace where codetracer-trace-format-nim is a sibling.",
+            ct_print.display()
+        );
+        return;
+    }
+
+    // Two NDJSON step events on the same source line at distinct
+    // 1-based columns.  Models a Cadence statement-pair packed onto
+    // one line such as `let a = 1; let b = 2;` (Cadence permits
+    // multiple statements per line via `;`).  The Go helper emits
+    // `pos.Column + 1` to convert from Cadence's 0-based column.
+    //
+    // We materialise a real source file on disk so the recorder's
+    // `ensure_path_with_line_lengths` helper can populate the
+    // `paths.dat` Layout A per-line byte-length table.  Without that
+    // table the column-aware reader cannot reconstruct columns from
+    // the writer-side global position (line-only fallback at read
+    // time).  The fixture's line 2 has plenty of width to host two
+    // statements at columns 5 and 18.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let source_path = tmp.path().join("col_aware.cdc");
+    std::fs::write(
+        &source_path,
+        "access(all) fun main(): Void {\n    let a = 1; let b = 2;\n    return\n}\n",
+    )
+    .expect("write fixture source");
+
+    let ndjson = format!(
+        r#"{{"type":"call","name":"main"}}
+{{"type":"step","file":"{file}","line":2,"column":5}}
+{{"type":"variable","name":"a","value":"1","cadence_type":"Int"}}
+{{"type":"step","file":"{file}","line":2,"column":18}}
+{{"type":"variable","name":"b","value":"2","cadence_type":"Int"}}
+{{"type":"return","value":"","cadence_type":"Void"}}"#,
+        file = source_path.to_string_lossy(),
+    );
+
+    let events = parse_ndjson(&ndjson).expect("parse column-aware ndjson");
+    let out_dir = tmp.path().join("traces");
+
+    CadenceTracer::trace_program_from_events(&source_path, &events, &out_dir)
+        .expect("trace_program_from_events should succeed for column-aware NDJSON");
+
+    let ct = first_ct_file(&out_dir);
+    assert_ctfs_magic(&ct);
+
+    let dump = Command::new(&ct_print)
+        .args(["--full", "--strip-paths"])
+        .arg(&ct)
+        .output()
+        .expect("failed to run ct-print --full");
+    assert!(
+        dump.status.success(),
+        "ct-print --full should succeed; stderr: {}",
+        String::from_utf8_lossy(&dump.stderr),
+    );
+
+    let doc: serde_json::Value =
+        serde_json::from_slice(&dump.stdout).expect("ct-print --full should emit valid JSON");
+
+    // --- meta.dat bit 4: FLAG_HAS_COLUMN_AWARE_STEPS ---
+    let has_column_aware = doc["metadata"]["flags"]["has_column_aware_steps"].as_bool();
+    assert_eq!(
+        has_column_aware,
+        Some(true),
+        "trace metadata must advertise has_column_aware_steps=true; got {:?}",
+        doc["metadata"],
+    );
+
+    // --- gather step columns per line ---
+    let events_arr = doc["events"].as_array().expect("events array");
+    let mut cols_by_line: std::collections::BTreeMap<i64, std::collections::BTreeSet<i64>> =
+        std::collections::BTreeMap::new();
+    for ev in events_arr {
+        if ev["kind"] != "step" {
+            continue;
+        }
+        let Some(line) = ev["line"].as_i64() else {
+            continue;
+        };
+        let Some(col) = ev["column"].as_i64() else {
+            continue;
+        };
+        cols_by_line.entry(line).or_default().insert(col);
+    }
+
+    // The fixture packs two steps onto line 2 at distinct columns
+    // (5 and 18).  ct-print --full must surface both columns.
+    let line_2_cols = cols_by_line.get(&2).cloned().unwrap_or_default();
+    assert!(
+        line_2_cols.len() >= 2,
+        "expected >= 2 distinct step columns on line 2; got {line_2_cols:?}; \
+         full line->cols map: {cols_by_line:?}",
+    );
+    for col in &line_2_cols {
+        assert!(
+            *col >= 1,
+            "step column must be >= 1 (1-based on the wire); got {col}",
+        );
+    }
+}

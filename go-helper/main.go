@@ -35,6 +35,14 @@ type TraceEvent struct {
 	Type        string     `json:"type"`
 	File        string     `json:"file,omitempty"`
 	Line        int        `json:"line,omitempty"`
+	// Column is the 1-based source column the step landed on, copied
+	// from the Cadence AST `Position.Column` value (which is itself
+	// 1-based in the Cadence runtime).  Emitted on every `step`
+	// event so the Rust recorder can forward the column through
+	// `register_step_with_column` for column-aware replay
+	// navigation.  Omitted (treated as `None` on the Rust side) when
+	// the AST position is unavailable.
+	Column      int        `json:"column,omitempty"`
 	Name        string     `json:"name,omitempty"`
 	Value       string     `json:"value,omitempty"`
 	Payload     string     `json:"payload,omitempty"`
@@ -398,10 +406,18 @@ func executeAndTrace(source []byte) error {
 			prevFuncName = currentFunc
 		}
 
+		// Cadence's `ast.Position.Column` is a 0-based byte count;
+		// CTFS column-aware Step events use 1-based columns (see
+		// `codetracer-trace-format-spec/trace-events.md` and the
+		// EVM / Cairo recorders' identical `+ 1` adjustment).  We
+		// convert on the helper side so the NDJSON column field is
+		// already in the wire-format convention the Rust recorder
+		// forwards verbatim through `register_step_with_column`.
 		emit(TraceEvent{
-			Type: "step",
-			File: sourceFile,
-			Line: pos.Line,
+			Type:   "step",
+			File:   sourceFile,
+			Line:   pos.Line,
+			Column: pos.Column + 1,
 		})
 
 		// Extract local variables from the current activation.
