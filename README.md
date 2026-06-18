@@ -92,6 +92,13 @@ Test programs live in:
 
 - `test-programs/cadence/` -- Cadence smart contract examples
 
+### Examples
+
+See [`examples/`](examples/README.md) for a short, hands-on walkthrough
+of recording and replaying Cadence programs with `ct record`, `ct
+replay`, and `ct run`, including a note on Cadence's column-aware
+step-over.
+
 ### Environment variables
 
 | Variable | Description |
