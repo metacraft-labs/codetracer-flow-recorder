@@ -154,7 +154,11 @@ jobs:
             "$DEST"
           if [ "$CT_REF" != "main" ]; then
             git -C "$DEST" fetch origin "$CT_REF"
-            git -C "$DEST" checkout "$CT_REF"
+            # FETCH_HEAD so the checkout works for both SHAs and branch
+            # names (a depth-1 clone has no local branch tracking ``dev``,
+            # so ``git checkout dev`` would fail with ``pathspec 'dev'
+            # did not match any file(s) known to git``).
+            git -C "$DEST" checkout FETCH_HEAD
           fi
           git -C "$DEST" \
             -c "url.https://x-access-token:${GH_TOKEN}@github.com/.insteadOf=https://github.com/" \
@@ -215,7 +219,8 @@ jobs:
           DEST="$GITHUB_WORKSPACE/../codetracer-trace-format"
           rm -rf "$DEST"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format.git" "$DEST"
-          git -C "$DEST" checkout "$TF_REF"
+          git -C "$DEST" fetch origin "$TF_REF"
+          git -C "$DEST" checkout FETCH_HEAD
 
       - name: Clone codetracer-trace-format-nim as recorder sibling
         env:
@@ -236,7 +241,8 @@ jobs:
           DEST="$GITHUB_WORKSPACE/../codetracer-trace-format-nim"
           rm -rf "$DEST"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format-nim.git" "$DEST"
-          git -C "$DEST" checkout "$TFN_REF" 2>/dev/null || true
+          git -C "$DEST" fetch origin "$TFN_REF" 2>/dev/null || true
+          git -C "$DEST" checkout FETCH_HEAD 2>/dev/null || true
 
       - name: Clone codetracer-trace-format into codetracer/libs (CI override)
         env:
@@ -256,12 +262,21 @@ jobs:
           DEST="$GITHUB_WORKSPACE/../codetracer/libs/codetracer-trace-format"
           rm -rf "$DEST"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format.git" "$DEST"
-          git -C "$DEST" checkout "$TF_REF"
+          git -C "$DEST" fetch origin "$TF_REF"
+          git -C "$DEST" checkout FETCH_HEAD
 
       - name: Build codetracer
         run: |
           cd "$GITHUB_WORKSPACE/../codetracer"
-          OVERRIDE="--override-input codetracer-trace-format path:./libs/codetracer-trace-format"
+          # Override BOTH trace-format AND trace-format-nim against the
+          # workflow-cloned siblings so the Rust wrapper and the Nim FFI
+          # advance together.  Without the -nim override, codetracer's
+          # flake.lock pins a stale trace-format-nim that the cairo/evm
+          # fixes already documented — same wiring needed here for the
+          # column-aware GLI decode + entryStep fixes to reach the DAP
+          # server that flow's smoke tests hit.
+          OVERRIDE="--override-input codetracer-trace-format path:./libs/codetracer-trace-format \
+                    --override-input codetracer-trace-format-nim path:$GITHUB_WORKSPACE/../codetracer-trace-format-nim"
           nix build -L ".?submodules=1#codetracer" $OVERRIDE -o result-ct
           nix build -L ".?submodules=1#db-backend" $OVERRIDE -o result-db
           # Merge both outputs into a single bin directory so the extension
