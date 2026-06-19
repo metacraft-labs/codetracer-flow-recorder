@@ -901,8 +901,8 @@ impl CadenceTracer {
         // statement to a sharp `(line, column)` pair so per-column
         // breakpoints and per-column motions are both meaningful.
         // Advertise both so the GUI shows the per-column UI.
-        TraceWriter::enable_column_breakpoints_support(&mut *tracer.writer);
-        TraceWriter::enable_column_motions_support(&mut *tracer.writer);
+        tracer.writer.enable_column_breakpoints_support();
+        tracer.writer.enable_column_motions_support();
 
         // FU-Column-Aware-Nav-Flow: register the entry source path's
         // per-line byte-length table BEFORE `TraceWriter::start`.
@@ -979,8 +979,8 @@ impl CadenceTracer {
         // matching block in `trace_program` for the full rationale.
         TraceWriter::enable_column_aware_steps(&mut *tracer.writer);
         // M-capability-flags: mirror the `trace_program` path.
-        TraceWriter::enable_column_breakpoints_support(&mut *tracer.writer);
-        TraceWriter::enable_column_motions_support(&mut *tracer.writer);
+        tracer.writer.enable_column_breakpoints_support();
+        tracer.writer.enable_column_motions_support();
         tracer.ensure_path_with_line_lengths(source_path);
 
         // Start the trace.
@@ -1034,8 +1034,8 @@ impl CadenceTracer {
         // M-capability-flags: keep the trait call shape uniform on
         // the test double so the capability contract is documented
         // in one place too.
-        TraceWriter::enable_column_breakpoints_support(&mut *tracer.writer);
-        TraceWriter::enable_column_motions_support(&mut *tracer.writer);
+        tracer.writer.enable_column_breakpoints_support();
+        tracer.writer.enable_column_motions_support();
         tracer.ensure_path_with_line_lengths(source_path);
 
         TraceWriter::start(&mut *tracer.writer, source_path, Line(1));
