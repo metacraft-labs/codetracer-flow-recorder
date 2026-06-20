@@ -824,11 +824,9 @@ impl CadenceTracer {
             Ok(src) => compute_line_lengths(&src),
             Err(_) => Vec::new(),
         };
-        if let Err(err) = TraceWriter::register_path_with_line_lengths(
-            &mut *self.writer,
-            path,
-            &line_lengths,
-        ) {
+        if let Err(err) =
+            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths)
+        {
             eprintln!(
                 "[codetracer-flow-recorder] register_path_with_line_lengths failed for {}: {} \
                  (column resolution will fall back to None for this file)",
