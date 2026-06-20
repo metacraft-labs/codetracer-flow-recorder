@@ -64,13 +64,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
+        uses: metacraft-labs/nixos-modules/.github/setup-nix@main
         with:
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-          cachix-cache: ''
-          trusted-public-keys: ''
-          substituters: ''
-          gh-token: ${{ steps.app-token.outputs.token }}
+          push-to-cache: false
+          trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
+          substituters: ${{ vars.ATTIC_SUBSTITUTER }}
+          nix-github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Install just
         uses: extractions/setup-just@v2
@@ -109,23 +108,9 @@ jobs:
             "${{ github.event.inputs.vscode_extension_ref }}" \
             "${{ github.event.client_payload.vscode_extension_ref }}")
 
-          resolve_branch() {
-            local name="$1"
-            if [ -f .github/sibling-pins ]; then
-              local branch
-              branch="$(grep "^${name} " .github/sibling-pins | cut -d' ' -f3)" || true
-              if [ -n "$branch" ]; then
-                echo "$branch"; return
-              fi
-            fi
-            echo "main"
-          }
-
           echo "codetracer_ref=$CT_REF" >> "$GITHUB_OUTPUT"
           echo "vscode_extension_ref=$EXT_REF" >> "$GITHUB_OUTPUT"
-          EXT_BRANCH=$(resolve_branch codetracer-vscode-extension)
-          echo "vscode_extension_branch=$EXT_BRANCH" >> "$GITHUB_OUTPUT"
-          echo "Resolved refs: codetracer=$CT_REF, vscode-extension=$EXT_REF (branch=$EXT_BRANCH)"
+          echo "Resolved refs: codetracer=$CT_REF, vscode-extension=$EXT_REF"
 
       - name: Clone codetracer
         env:
@@ -165,16 +150,13 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           EXT_REF="${{ steps.resolve-refs.outputs.vscode_extension_ref }}"
-          EXT_BRANCH="${{ steps.resolve-refs.outputs.vscode_extension_branch }}"
           DEST="$GITHUB_WORKSPACE/../codetracer-vscode-extension"
           rm -rf "$DEST"
           git clone --depth 1 \
             "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-vscode-extension.git" \
             "$DEST"
-          if [ "$EXT_BRANCH" != "main" ]; then
-            git -C "$DEST" fetch origin "$EXT_BRANCH"
-            git -C "$DEST" checkout FETCH_HEAD
-          fi
+          git -C "$DEST" fetch --depth 1 origin "$EXT_REF"
+          git -C "$DEST" checkout --detach FETCH_HEAD
 
       - name: Clone nix-blockchain-development
         env:
@@ -236,7 +218,7 @@ jobs:
           DEST="$GITHUB_WORKSPACE/../codetracer-trace-format-nim"
           rm -rf "$DEST"
           git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format-nim.git" "$DEST"
-          git -C "$DEST" checkout "$TFN_REF" 2>/dev/null || true
+          git -C "$DEST" checkout "$TFN_REF"
 
       - name: Clone codetracer-trace-format into codetracer/libs (CI override)
         env:
@@ -258,12 +240,34 @@ jobs:
           git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format.git" "$DEST"
           git -C "$DEST" checkout "$TF_REF"
 
+      - name: Clone codetracer-trace-format-nim into codetracer/libs (CI override)
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        # The codetracer Build step below also overrides
+        # ``codetracer-trace-format-nim`` so CodeTracer's locked Nim
+        # reader is aligned with the trace-format writer used by the
+        # recorder.
+        run: |
+          PINS="$GITHUB_WORKSPACE/.github/sibling-pins"
+          TFN_REF="main"
+          if [ -f "$PINS" ]; then
+            PIN_REF="$(grep '^codetracer-trace-format-nim ' "$PINS" | cut -d' ' -f2)" || true
+            [ -n "$PIN_REF" ] && TFN_REF="$PIN_REF"
+          fi
+          DEST="$GITHUB_WORKSPACE/../codetracer/libs/codetracer-trace-format-nim"
+          rm -rf "$DEST"
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/metacraft-labs/codetracer-trace-format-nim.git" "$DEST"
+          git -C "$DEST" checkout "$TFN_REF"
+
       - name: Build codetracer
         run: |
           cd "$GITHUB_WORKSPACE/../codetracer"
-          OVERRIDE="--override-input codetracer-trace-format path:./libs/codetracer-trace-format"
-          nix build -L ".?submodules=1#codetracer" $OVERRIDE -o result-ct
-          nix build -L ".?submodules=1#db-backend" $OVERRIDE -o result-db
+          OVERRIDES=(
+            --override-input codetracer-trace-format path:./libs/codetracer-trace-format
+            --override-input codetracer-trace-format-nim path:./libs/codetracer-trace-format-nim
+          )
+          nix build -L ".?submodules=1#codetracer" "${OVERRIDES[@]}" -o result-ct
+          nix build -L ".?submodules=1#db-backend" "${OVERRIDES[@]}" -o result-db
           # Merge both outputs into a single bin directory so the extension
           # can find both ct and db-backend via a single runnablePath.
           mkdir -p combined-bin
