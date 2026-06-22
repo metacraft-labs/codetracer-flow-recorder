@@ -1,5 +1,9 @@
 name: CI
 
+# Re-plays the project's deterministic dev env on the runner.
+# See:
+#   https://github.com/metacraft-labs/metacraft-dev-guidelines/blob/latest/policies/ci-shared-dev-env.md
+
 on:
   push:
     branches: [main, dev, stable]
@@ -9,7 +13,7 @@ on:
 jobs:
   lint-and-test:
     name: Lint and test
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, nixos]
     steps:
       - uses: actions/checkout@v4
 
@@ -21,95 +25,39 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
+      - name: Setup dev env
+        # setup-dev-env clones the siblings listed in .github/sibling-repos
+        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # workspace-lock-pinned revisions before materialising the nix env.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
 
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
+      - name: Build Nim trace writer library (sibling artifact)
         run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-flow-recorder --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-flow-recorder (candidates: $CANDS). The commit must be published through the workspace tooling (pre-push hook / 'workspace lock')."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-flow-recorder: $LOCK_SHA"
-
-      - name: Clone codetracer-trace-format (Cargo path dependency)
-        run: |
-          # The resolver returns the workspace-locked SHA (not a branch
-          # name), so fetch that exact commit and check it out detached.
-          TF_REF="$("${{ github.workspace }}/scripts/resolve-sibling-rev.sh" \
-            --repo codetracer-flow-recorder --sibling codetracer-trace-format \
-            --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          DEST="${GITHUB_WORKSPACE}/../codetracer-trace-format"
-          rm -rf "$DEST"
-          git clone --no-checkout "https://github.com/metacraft-labs/codetracer-trace-format.git" "$DEST"
-          git -C "$DEST" fetch --depth 1 origin "${TF_REF}"
-          git -C "$DEST" checkout --detach FETCH_HEAD
-
-
-      - name: Install Nim
-        uses: jiro4989/setup-nim-action@v2
-        with:
-          nim-version: "2.2.x"
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build Nim trace writer library
-        run: |
-          git clone --depth 1 \
-            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
-            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
-          nimble install -y stew results
-          nim c --app:staticlib --mm:arc --noMain -d:release -p:src \
-            -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          dev-exec bash -c '
+            set -euo pipefail
+            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+            nimble install -y stew results
+            nim c --app:staticlib --mm:arc --noMain -d:release -p:src \
+              -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          '
           echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y capnproto
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-
-      - name: Cache cargo artifacts
-        uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
-        run: cargo fmt -- --check
+        run: dev-exec cargo fmt -- --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: dev-exec cargo clippy --all-targets -- -D warnings
 
       - name: Build
-        run: cargo build --all-targets
+        run: dev-exec cargo build --all-targets
 
       - name: Run tests with zero-test guard
         run: |
           set -euo pipefail
-          OUTPUT=$(cargo test --all-targets 2>&1) || { echo "$OUTPUT"; exit 1; }
+          OUTPUT=$(dev-exec cargo test --all-targets 2>&1) || { echo "$OUTPUT"; exit 1; }
           echo "$OUTPUT"
           # Guard against silently empty test suites
           if ! echo "$OUTPUT" | grep -qP "test result: ok\. [1-9]"; then
