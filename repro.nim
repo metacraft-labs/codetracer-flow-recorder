@@ -50,6 +50,9 @@ package codetracer_flow_recorder:
     # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
     # feature instead so neither is on the windows toolchain floor.
     when not defined(windows):
+      # Cargo build scripts look for ``cc`` by default; pass ``CC=clang``
+      # below and make clang part of the Unix dev environment.
+      "clang"
       "pkg-config"
       "openssl"
 
@@ -70,6 +73,9 @@ package codetracer_flow_recorder:
     const binarySuffix = (when defined(windows): ".exe" else: "")
     const recorderBinary =
       "target/release/codetracer-flow-recorder" & binarySuffix
+    let cargoCompilerEnv: seq[(string, string)] =
+      when defined(windows): @[]
+      else: @[("CC", "clang")]
 
     let recorderBuild = cargo.build(
       locked = true,
@@ -79,7 +85,8 @@ package codetracer_flow_recorder:
         "Cargo.toml", "Cargo.lock",
         "src", "build.rs"
       ],
-      extraOutputs = @[recorderBinary])
+      extraOutputs = @[recorderBinary],
+      extraEnv = cargoCompilerEnv)
     discard collect("default", @[recorderBuild])
 
     # ---- Test-binary build + run edges (the `test` collection) -------
@@ -107,7 +114,8 @@ package codetracer_flow_recorder:
         "Cargo.toml", "Cargo.lock",
         "src", "build.rs", "tests"
       ],
-      extraOutputs = @["target/debug/deps"])
+      extraOutputs = @["target/debug/deps"],
+      extraEnv = cargoCompilerEnv)
 
     let testsRun = cargo.test(
       locked = true,
@@ -117,6 +125,7 @@ package codetracer_flow_recorder:
         "Cargo.toml", "Cargo.lock",
         "src", "tests",
         "target/debug/deps"
-      ])
+      ],
+      extraEnv = cargoCompilerEnv)
 
     discard collect("test", @[testsRun.action])
