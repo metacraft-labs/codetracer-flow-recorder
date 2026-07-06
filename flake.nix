@@ -35,16 +35,20 @@
           packages = [
             pkgs.zstd # required by libcodetracer_trace_writer (Nim FFI)
 
-            # Nim toolchain for codetracer_trace_writer_nim's build.rs
-            # cargo build script, which shells out to ``nimble`` (Nim's
-            # package manager that ships alongside ``nim``) to compile
-            # the trace writer's Nim sources into a static lib the
-            # recorder's Cargo.toml links against.  Without these the
-            # build aborts at ``failed to run `nimble` -- it ships with
-            # the Nim toolchain and must be on PATH alongside `nim``
-            # because the cadence dev shell doesn't pull in nim itself.
+            # Declare the toolchain explicitly so CI's dev shell
+            # mirrors local dev exactly. Cached mcl-blockchain
+            # devShells from Attic sometimes drop required tools from
+            # PATH on resolution; declaring them here keeps the
+            # contract visible in flake.nix.
             pkgs.nim
             pkgs.nimble
+            pkgs.just
+            pkgs.capnproto
+            pkgs.rustc
+            pkgs.cargo
+            pkgs.rustfmt
+            pkgs.clippy
+            pkgs.pkg-config
           ];
         };
       }
