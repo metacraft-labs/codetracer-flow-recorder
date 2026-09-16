@@ -6331,3 +6331,135 @@ fn test_multi_test_entry_test_via_ct_print_full() {
          exits with the same Int payload."
     );
 }
+
+// --- columns_test.cdc ----------------------------------------------------
+
+const COLUMNS_NDJSON: &str = include_str!("ndjson/columns_test.ndjson");
+
+/// The column-aware path, exercised in both directions.
+///
+/// Every other fixture in this file drives steps with no column at all, so
+/// the recorder's column handling has been indistinguishable from its
+/// absence: `enable_column_aware_steps` is called, the trace's bit 4 is set,
+/// and not one step has ever carried a column to resolve. An unexercised gate
+/// is indistinguishable from an absent one until something needs it
+/// (`conformance-testing.md` §"What this asks of a conformance suite").
+///
+/// `columns_test.cdc` puts two statements on line 9 so the column is the only
+/// thing that tells the two steps on it apart, and the fixture also steps
+/// through `columns_test_onchain.cdc`, which has no file on disk — the shape
+/// a Cadence `import` from an address produces, where the contract's source
+/// lives on chain and the recorder has nothing to read. That file gets no
+/// per-line table, so it has no column axis, and a column folded into its
+/// address would name a later line rather than a column.
+#[test]
+fn test_columns_test_via_ct_print_full() {
+    let Some((doc, source_path)) = record_and_dump_full(
+        "test_columns_test_via_ct_print_full",
+        "columns_test.cdc",
+        COLUMNS_NDJSON,
+    ) else {
+        return;
+    };
+
+    assert_metadata_program_ends_with(&doc, &source_path);
+
+    // The trace declares itself column-aware; without bit 4 a reader would
+    // not decode a column for any step and every assertion below would be
+    // reading a line-only trace.
+    assert_eq!(
+        doc["metadata"]["flags"]["has_column_aware_steps"].as_bool(),
+        Some(true),
+        "the recorder opts into column-aware encoding, so meta.dat bit 4 \
+         must be set; metadata={}",
+        doc["metadata"]
+    );
+
+    // ----- Every step's resolved (file, line, column) -----------------
+    // `column` is absent, not zero, for a file with no column axis: the
+    // reader declines to decode one rather than inventing a value, and
+    // ct-print leaves the key off. `None` here means "the reader refused",
+    // which is the state the format asks for.
+    let positions: Vec<(String, i64, Option<i64>)> = doc["events"]
+        .as_array()
+        .expect("events array")
+        .iter()
+        .filter(|e| e["kind"] == "step")
+        .map(|e| {
+            let file = e["path"]
+                .as_str()
+                .expect("step.path str")
+                .rsplit(['/', '\\'])
+                .next()
+                .unwrap()
+                .to_string();
+            (
+                file,
+                e["line"].as_i64().expect("step.line i64"),
+                e["column"].as_i64(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        positions,
+        vec![
+            // The entry step `start` emits, at line 1 column 1 of the
+            // entry source.
+            ("columns_test.cdc".to_string(), 1, Some(1)),
+            // `return compute()` — the call site, not the line's start.
+            ("columns_test.cdc".to_string(), 14, Some(12)),
+            // `var a = 1`
+            ("columns_test.cdc".to_string(), 8, Some(5)),
+            // Line 9 twice, at the two statements on it. These two entries
+            // are the fixture's reason to exist: under a line-only address
+            // they are the same position, and nothing downstream could tell
+            // a step-over of the first from a step-over of the second.
+            ("columns_test.cdc".to_string(), 9, Some(5)),
+            ("columns_test.cdc".to_string(), 9, Some(17)),
+            // `return b`
+            ("columns_test.cdc".to_string(), 10, Some(5)),
+            // The on-chain contract: line 3, and NO column. Line 3 is the
+            // assertion that bites — a column of 9 folded into a line-only
+            // address resolves to line 11, a position this program never
+            // executed and one that reads back as entirely plausible.
+            ("columns_test_onchain.cdc".to_string(), 3, None),
+        ],
+    );
+
+    // Non-degeneracy: the comparison above is only evidence if the trace
+    // actually resolved columns. A trace whose every column came back `None`
+    // would still be a list of tuples.
+    assert!(
+        positions.iter().filter(|(_, _, c)| c.is_some()).count() >= 6,
+        "at least the six steps in the on-disk source must resolve a \
+         column, or the column-aware path was never exercised; got \
+         {positions:?}"
+    );
+
+    // ----- The locals still land on their own steps -------------------
+    assert_eq!(
+        observed_int_var_sequence(&doc, &["a", "b"]),
+        vec![("a".into(), 1), ("b".into(), 22)]
+    );
+
+    // ----- Call tree ---------------------------------------------------
+    assert_eq!(
+        observed_call_entry_sequence(&doc),
+        vec![
+            "<toplevel>".to_string(),
+            "main".to_string(),
+            "compute".to_string(),
+            "OnChain.settle".to_string()
+        ]
+    );
+    assert_eq!(
+        observed_call_exit_sequence(&doc),
+        vec![
+            "OnChain.settle".to_string(),
+            "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
+        ]
+    );
+}
