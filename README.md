@@ -15,9 +15,8 @@ CodeTracer CTFS multi-stream format. Resource events
 with `@resource:Type#UUID` naming so you can follow the full lifecycle
 of Flow resources through the program.
 
-The recorder is **CTFS-only** (see
-`Recorder-CLI-Conventions.md`
-§4 in `codetracer-specs`). To convert a recorded `.ct` bundle to JSON
+The recorder is **CTFS-only**: it always writes the canonical CodeTracer
+CTFS multi-stream format. To convert a recorded `.ct` bundle to JSON
 or other human-readable forms, use `ct print` from
 [`codetracer-trace-format-nim`](https://github.com/metacraft-labs/codetracer-trace-format-nim).
 
