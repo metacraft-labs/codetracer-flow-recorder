@@ -449,10 +449,15 @@ fn test_recorded_trace_via_ct_print_json() {
     // ----- Step / call counts ----------------------------------------
     // The canonical NDJSON drives 8 step events (one per `step` line in
     // `flow_test_ndjson`, including the entry-point step on line 11 of
-    // main and the post-return step on line 7) and 2 call_entry events
-    // (main entered first at depth 0, then compute at depth 1).  These
-    // are stable properties of the canonical fixture — if they change,
-    // that's a real regression to investigate, not a flake.
+    // main and the post-return step on line 7) and 3 call_entry events:
+    // the `<toplevel>` frame `start` opens to root the call tree
+    // (`trace-events.md` §"Recorder Integration — Starting a Recording"),
+    // then main at depth 1 and compute at depth 2.  These are stable
+    // properties of the canonical fixture — if they change, that's a real
+    // regression to investigate, not a flake.
+    //
+    // The STEP count is unchanged at 8.  `start` emits an entry step, but
+    // this writer always did, so only the function and call counts move.
     let counts = &doc["counts"];
     assert_eq!(
         counts["steps"].as_u64(),
@@ -461,16 +466,19 @@ fn test_recorded_trace_via_ct_print_json() {
     );
     assert_eq!(
         counts["calls"].as_u64(),
-        Some(2),
-        "expected 2 call events (main + compute); counts={counts}",
+        Some(3),
+        "expected 3 call events (<toplevel> + main + compute); counts={counts}",
     );
 
     let events = doc["events"].as_array().expect("events array");
 
-    // ----- Call sequence: main first, then compute --------------------
-    // The recorder emits `call:main` then `call:compute` in the NDJSON
-    // event stream (main calls compute), so call_entry events appear in
-    // that order in the trace.
+    // ----- Call sequence: <toplevel>, then main, then compute ---------
+    // `start` opens the `<toplevel>` frame that roots the call tree
+    // (`trace-events.md` §"Recorder Integration — Starting a Recording":
+    // "`start(path, line)` ... registers a `<toplevel>` function plus its
+    // opening call ... every implementation of it does so").  The recorder
+    // then emits `call:main` and `call:compute` in NDJSON order (main calls
+    // compute), and call_entry events appear in entry order.
     let call_sequence: Vec<&str> = events
         .iter()
         .filter(|e| e["kind"] == "call_entry")
@@ -478,18 +486,23 @@ fn test_recorded_trace_via_ct_print_json() {
         .collect();
     assert_eq!(
         call_sequence.len(),
-        2,
-        "expected exactly 2 call_entry events; got {:?}",
+        3,
+        "expected exactly 3 call_entry events; got {:?}",
+        call_sequence
+    );
+    assert_eq!(
+        call_sequence[0], "<toplevel>",
+        "expected the root frame `start` opens; got {:?}",
         call_sequence
     );
     assert!(
-        call_sequence[0].ends_with("main"),
-        "expected first call to be `main`; got {:?}",
+        call_sequence[1].ends_with("main"),
+        "expected the first recorder-emitted call to be `main`; got {:?}",
         call_sequence
     );
     assert!(
-        call_sequence[1].ends_with("compute"),
-        "expected second call to be `compute`; got {:?}",
+        call_sequence[2].ends_with("compute"),
+        "expected the second recorder-emitted call to be `compute`; got {:?}",
         call_sequence
     );
 
@@ -824,6 +837,10 @@ fn record_and_dump_full(
 
     drop(tmp_dir);
 
+    // Every `--full` fixture gets the call-tree nesting check, not just the
+    // ones that spell an exit sequence out by name.
+    assert_call_exit_nesting(&doc);
+
     Some((doc, source_path))
 }
 
@@ -836,6 +853,64 @@ fn assert_metadata_program_ends_with(doc: &serde_json::Value, source_path: &Path
     assert!(
         prog.ends_with(&*want),
         "metadata.program {prog} must end with {want}"
+    );
+}
+
+/// Assert that no call closes before a call nested inside it.
+///
+/// `trace-events.md` §"Call Stream (`calls.dat`)" gives every call record a
+/// `parent_key` and a `children_keys` list alongside its
+/// `[first_step_id, last_step_id]` range: a child's range lies inside its
+/// parent's, so a parent's `call_exit` is the last event of its subtree.
+///
+/// The per-test `observed_call_exit_sequence` pins are name lists, and a name
+/// list only catches an ordering regression in the fixtures that happen to be
+/// spelled out.  This derives the constraint from the call tree the container
+/// itself carries, so it holds for every fixture and fails on any event stream
+/// that closes a parent while one of its children is still open — the shape a
+/// reader would render as a frame outliving its own callee.
+fn assert_call_exit_nesting(doc: &serde_json::Value) {
+    use std::collections::{HashMap, HashSet};
+
+    let events = doc["events"].as_array().expect("events array");
+    let mut children: HashMap<i64, Vec<i64>> = HashMap::new();
+    for ev in events.iter().filter(|e| e["kind"] == "call_entry") {
+        let key = ev["call_key"].as_i64().expect("call_entry.call_key i64");
+        let kids = ev["children"]
+            .as_array()
+            .expect("call_entry.children array")
+            .iter()
+            .map(|c| c.as_i64().expect("children entry i64"))
+            .collect();
+        children.insert(key, kids);
+    }
+
+    let mut closed: HashSet<i64> = HashSet::new();
+    let mut exits = 0usize;
+    for ev in events.iter().filter(|e| e["kind"] == "call_exit") {
+        let key = ev["call_key"].as_i64().expect("call_exit.call_key i64");
+        for child in children.get(&key).into_iter().flatten() {
+            assert!(
+                closed.contains(child),
+                "call_key {key} ({}) exits while its child call_key {child} is \
+                 still open; a parent's range contains its children's, so its \
+                 exit is the last event of its subtree. Exit order was {:?}",
+                ev["function"].as_str().unwrap_or("?"),
+                observed_call_exit_sequence(doc),
+            );
+        }
+        closed.insert(key);
+        exits += 1;
+    }
+
+    // Non-degeneracy: a trace with no call_exit events would satisfy the loop
+    // above vacuously.  Every fixture records at least the `<toplevel>` frame
+    // `start` opens, so zero exits means the check never looked at anything.
+    assert!(
+        exits > 0,
+        "no call_exit events to check — the nesting assertion would pass \
+         vacuously; events={:?}",
+        events.iter().map(|e| &e["kind"]).collect::<Vec<_>>()
     );
 }
 
@@ -1090,14 +1165,14 @@ fn test_nested_calls_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "compute", "outer", "middle", "inner"],
+        vec!["<toplevel>", "main", "compute", "outer", "middle", "inner"],
         "function table must be in entry order"
     );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -1110,40 +1185,43 @@ fn test_nested_calls_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 10 steps + 5 call_entry + 5 call_exit = 20 events
-    assert_eq!(events.len(), 20, "events.len()");
+    // 10 steps + 6 call_entry + 6 call_exit = 22 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 22, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call entry order: outermost first --------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "outer".to_string(),
             "middle".to_string(),
-            "inner".to_string(),
+            "inner".to_string()
         ],
         "call_entry events must appear in entry order"
     );
 
-    // ----- Call exit order --------------------------------------------
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so the inner sub-chain still
-    // appears LIFO (inner→middle→outer) but the outer pair now flushes
-    // in entry order (main before compute) rather than the previous
-    // pure-LIFO order.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
             "inner".to_string(),
             "middle".to_string(),
             "outer".to_string(),
-            "main".to_string(),
             "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
         ],
-        "call_exit events appear in trace-format-nim eec665b entry-key flush order"
+        "call_exit events close the innermost open frame first"
     );
 
     // ----- Exact decoded variable values ------------------------------
@@ -1164,7 +1242,7 @@ fn test_nested_calls_test_via_ct_print_full() {
     // LIFO order: inner=13, middle=13, outer=113, compute=113, main=113
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(13), Some(13), Some(113), Some(113), Some(113)],
+        vec![Some(13), Some(13), Some(113), Some(113), Some(113), None],
     );
 }
 
@@ -1198,6 +1276,7 @@ fn test_control_flow_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "classify",
@@ -1211,7 +1290,7 @@ fn test_control_flow_test_via_ct_print_full() {
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(30), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(8), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -1219,27 +1298,32 @@ fn test_control_flow_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 30 steps + 7 call_entry + 7 call_exit = 44 events.
-    assert_eq!(events.len(), 44, "events.len()");
+    // 30 steps + 8 call_entry + 8 call_exit = 46 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 46, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "classify".to_string(),
             "while_sum".to_string(),
             "for_sum".to_string(),
             "switch_label".to_string(),
-            "early_return".to_string(),
+            "early_return".to_string()
         ],
     );
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so main flushes before
-    // compute rather than after it.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
@@ -1248,8 +1332,9 @@ fn test_control_flow_test_via_ct_print_full() {
             "for_sum".to_string(),
             "switch_label".to_string(),
             "early_return".to_string(),
-            "main".to_string(),
             "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
         ],
     );
 
@@ -1320,11 +1405,11 @@ fn test_control_flow_test_via_ct_print_full() {
     );
 
     // ----- Return values: typed kinds per call_exit ------------------
-    // Exit order (post trace-format-nim eec665b entry-key flush):
-    // classify=String "small", while_sum=6, for_sum=10,
-    // switch_label=String "small", early_return=999, main=1022,
-    // compute=1022.  String returns must surface as
-    // `ValueRecord::String`, not `Raw`.
+    // Innermost frame first: classify=String "small", while_sum=6,
+    // for_sum=10, switch_label=String "small", early_return=999,
+    // compute=1022, main=1022, and finally the `<toplevel>` root, which
+    // the writer finalizes with the VoidReturn marker.  String returns
+    // must surface as `ValueRecord::String`, not `Raw`.
     let returns: Vec<(String, &str)> = doc["events"]
         .as_array()
         .unwrap()
@@ -1344,8 +1429,9 @@ fn test_control_flow_test_via_ct_print_full() {
             ("for_sum".into(), "Int"),
             ("switch_label".into(), "String"),
             ("early_return".into(), "Int"),
-            ("main".into(), "Int"),
             ("compute".into(), "Int"),
+            ("main".into(), "Int"),
+            ("<toplevel>".into(), "Void"),
         ],
         "return value kinds per call_exit (typed: String returns must \
          decode as `ValueRecord::String`, not `Raw`)"
@@ -1445,6 +1531,7 @@ fn test_collections_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "array_sum",
@@ -1457,7 +1544,7 @@ fn test_collections_test_via_ct_print_full() {
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(18), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -1465,26 +1552,31 @@ fn test_collections_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 18 steps + 6 call_entry + 6 call_exit = 30 events.
-    assert_eq!(events.len(), 30, "events.len()");
+    // 18 steps + 7 call_entry + 7 call_exit = 32 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 32, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "array_sum".to_string(),
             "dict_lookup".to_string(),
             "point_distance_sq".to_string(),
-            "maybe_double".to_string(),
+            "maybe_double".to_string()
         ],
     );
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so call_exit events appear in
-    // entry order rather than the previous inverse-LIFO order.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
@@ -1492,8 +1584,9 @@ fn test_collections_test_via_ct_print_full() {
             "dict_lookup".to_string(),
             "point_distance_sq".to_string(),
             "maybe_double".to_string(),
-            "main".to_string(),
             "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
         ],
     );
 
@@ -1652,7 +1745,15 @@ fn test_collections_test_via_ct_print_full() {
     // point_distance_sq=25, maybe_double=14, compute=79, main=79.
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(10), Some(30), Some(25), Some(14), Some(79), Some(79),],
+        vec![
+            Some(10),
+            Some(30),
+            Some(25),
+            Some(14),
+            Some(79),
+            Some(79),
+            None
+        ],
     );
 }
 
@@ -1730,6 +1831,7 @@ fn test_error_paths_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "safe_compute",
@@ -1743,7 +1845,7 @@ fn test_error_paths_test_via_ct_print_full() {
     // 15 explicit `step` events in the NDJSON + 1 implicit start
     // step emitted by `TraceWriter::start` = 16 step records.
     assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(8), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(3),
@@ -1752,8 +1854,8 @@ fn test_error_paths_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 16 steps + 7 call_entry + 7 call_exit + 3 io = 33 events.
-    assert_eq!(events.len(), 33, "events.len()");
+    // 16 steps + 8 call_entry + 8 call_exit + 3 io = 35 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 35, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence ---------------------------------------------
@@ -1763,13 +1865,14 @@ fn test_error_paths_test_via_ct_print_full() {
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "safe_compute".to_string(),
             "divide_strict".to_string(),
             "divide_strict".to_string(),
             "divide_strict".to_string(),
-            "panicking_call".to_string(),
+            "panicking_call".to_string()
         ],
     );
     // LIFO inside the safe chain, then the failure-mode invocations
@@ -1784,6 +1887,7 @@ fn test_error_paths_test_via_ct_print_full() {
             "divide_strict".to_string(),
             "divide_strict".to_string(),
             "panicking_call".to_string(),
+            "<toplevel>".to_string()
         ],
     );
 
@@ -1809,10 +1913,11 @@ fn test_error_paths_test_via_ct_print_full() {
 
     // ----- Returns: divide_strict=2, safe_compute=3, compute=3,
     // main=3, then divide_strict=Void (pre-fail), divide_strict=Void
-    // (post-fail), panicking_call=Void --------------------------------
+    // (post-fail), panicking_call=Void, and finally the `<toplevel>`
+    // frame `start` opens, which returns nothing ---------------------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(2), Some(3), Some(3), Some(3), None, None, None,],
+        vec![Some(2), Some(3), Some(3), Some(3), None, None, None, None],
     );
 
     // ----- IO events: pre-condition, post-condition, panic ------------
@@ -1920,13 +2025,20 @@ fn test_resource_capability_test_via_ct_print_full() {
     // follow-up.
     assert_eq!(
         functions,
-        vec!["main", "compute", "Coin.init", "Vault.init", "deposit"],
+        vec![
+            "<toplevel>",
+            "main",
+            "compute",
+            "Coin.init",
+            "Vault.init",
+            "deposit"
+        ],
     );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(15), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
     // 4 resource lifecycle events: create Coin, create Vault,
     // destroy Coin (inside deposit), destroy Vault.
     assert_eq!(
@@ -1936,17 +2048,18 @@ fn test_resource_capability_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 15 steps + 3 call_entry + 3 call_exit + 4 io = 25 events.
-    assert_eq!(events.len(), 25, "events.len()");
+    // 15 steps + 4 call_entry + 4 call_exit + 4 io = 27 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 27, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
-            "deposit".to_string(),
+            "deposit".to_string()
         ],
     );
     assert_eq!(
@@ -1955,6 +2068,7 @@ fn test_resource_capability_test_via_ct_print_full() {
             "deposit".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ],
     );
 
@@ -2032,7 +2146,10 @@ fn test_resource_capability_test_via_ct_print_full() {
     assert_eq!(coin_fields[1]["i"].as_i64(), Some(7001));
 
     // ----- Returns: deposit=Void, compute=42, main=42 ---------------
-    assert_eq!(observed_int_returns(&doc), vec![None, Some(42), Some(42)],);
+    assert_eq!(
+        observed_int_returns(&doc),
+        vec![None, Some(42), Some(42), None],
+    );
 }
 
 #[test]
@@ -2132,12 +2249,12 @@ fn test_capabilities_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(2),
@@ -2145,22 +2262,34 @@ fn test_capabilities_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 8 steps + 2 call_entry + 2 call_exit + 2 io = 14 events
-    assert_eq!(events.len(), 14, "events.len()");
+    // 8 steps + 3 call_entry + 3 call_exit + 2 io = 16 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 16, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
-        vec!["main".to_string(), "compute".to_string()]
+        vec![
+            "<toplevel>".to_string(),
+            "main".to_string(),
+            "compute".to_string()
+        ]
     );
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so call_exit events appear in
-    // entry order rather than the previous inverse-LIFO order.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
-        vec!["main".to_string(), "compute".to_string()]
+        vec![
+            "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
+        ]
     );
 
     // ----- Capability `cap` surfaces as ValueRecord::Reference --------
@@ -2227,7 +2356,7 @@ fn test_capabilities_test_via_ct_print_full() {
     );
 
     // ----- Returns ---------------------------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- account_storage_test.cdc ---------------------------------------------
@@ -2263,7 +2392,10 @@ fn test_account_storage_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "Vault.init"]
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -2271,7 +2403,7 @@ fn test_account_storage_test_via_ct_print_full() {
     // (each lifecycle event also calls `register_step` at its line) +
     // 1 implicit start step from `TraceWriter::start` = 16.
     assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -2280,8 +2412,8 @@ fn test_account_storage_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 16 steps + 2 call_entry + 2 call_exit + 2 io = 22 events
-    assert_eq!(events.len(), 22, "events.len()");
+    // 16 steps + 3 call_entry + 3 call_exit + 2 io = 24 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 24, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each Path surfaces as a typed Struct {domain, identifier} -
@@ -2332,7 +2464,7 @@ fn test_account_storage_test_via_ct_print_full() {
     );
 
     // ----- Returns: compute=242, main=242 ----------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(242), Some(242)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(242), Some(242), None]);
 }
 
 // --- references_test.cdc --------------------------------------------------
@@ -2371,6 +2503,7 @@ fn test_references_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "Vault.init",
@@ -2385,7 +2518,7 @@ fn test_references_test_via_ct_print_full() {
     // 13 explicit step + 2 implicit steps from resource_create / destroy
     // + 1 implicit start step = 16.
     assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -2394,19 +2527,20 @@ fn test_references_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 16 steps + 5 call_entry + 5 call_exit + 2 io = 28 events
-    assert_eq!(events.len(), 28, "events.len()");
+    // 16 steps + 6 call_entry + 6 call_exit + 2 io = 30 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 30, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "read_plain".to_string(),
             "read_restricted".to_string(),
-            "apply_withdraw".to_string(),
+            "apply_withdraw".to_string()
         ]
     );
 
@@ -2442,7 +2576,7 @@ fn test_references_test_via_ct_print_full() {
     //                apply_withdraw=25, compute=225, main=225 ---------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(100), Some(100), Some(25), Some(225), Some(225)]
+        vec![Some(100), Some(100), Some(25), Some(225), Some(225), None]
     );
 }
 
@@ -2481,6 +2615,7 @@ fn test_transactions_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "transaction.prepare",
             "transaction.execute",
@@ -2491,7 +2626,7 @@ fn test_transactions_test_via_ct_print_full() {
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(3),
@@ -2499,31 +2634,37 @@ fn test_transactions_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 8 steps + 4 call_entry + 4 call_exit + 3 io = 19 events
-    assert_eq!(events.len(), 19, "events.len()");
+    // 8 steps + 5 call_entry + 5 call_exit + 3 io = 21 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 21, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence: main → prepare → execute → post -----------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "transaction.prepare".to_string(),
             "transaction.execute".to_string(),
-            "transaction.post".to_string(),
+            "transaction.post".to_string()
         ]
     );
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so main now flushes before
-    // transaction.post rather than after it.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
             "transaction.prepare".to_string(),
             "transaction.execute".to_string(),
-            "main".to_string(),
             "transaction.post".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -2592,12 +2733,12 @@ fn test_numeric_widths_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -2605,8 +2746,8 @@ fn test_numeric_widths_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 12 steps + 2 call_entry + 2 call_exit = 16 events
-    assert_eq!(events.len(), 16, "events.len()");
+    // 12 steps + 3 call_entry + 3 call_exit = 18 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 18, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Widths <= 64-bit surface as ValueRecord::Int --------------
@@ -2698,7 +2839,7 @@ fn test_numeric_widths_test_via_ct_print_full() {
     );
 
     // ----- Returns ---------------------------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(1), Some(1)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(1), Some(1), None]);
 }
 
 // --- address_literals_test.cdc --------------------------------------------
@@ -2733,12 +2874,12 @@ fn test_address_literals_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -2746,8 +2887,8 @@ fn test_address_literals_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 8 steps + 2 call_entry + 2 call_exit = 12 events
-    assert_eq!(events.len(), 12, "events.len()");
+    // 8 steps + 3 call_entry + 3 call_exit = 14 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Small address (`0x01`) surfaces as ValueRecord::Int -------
@@ -2897,16 +3038,27 @@ fn test_resources_full_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "Vault.init", "Box.init"],);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "Vault.init", "Box.init"],
+    );
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
-        vec!["main".to_string(), "compute".to_string()]
+        vec![
+            "<toplevel>".to_string(),
+            "main".to_string(),
+            "compute".to_string()
+        ]
     );
     assert_eq!(
         observed_call_exit_sequence(&doc),
-        vec!["compute".to_string(), "main".to_string()]
+        vec![
+            "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
+        ]
     );
 
     // ----- Step indices monotonic ------------------------------------
@@ -3011,7 +3163,7 @@ fn test_resources_full_test_via_ct_print_full() {
     }
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- enums_test.cdc -------------------------------------------------------
@@ -3044,14 +3196,14 @@ fn test_enums_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "classify"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute", "classify"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 18 explicit step events + 1 implicit start step = 19 step records.
     assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
     // main, compute, classify×3 = 5 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // Enums do not produce io_events.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -3060,19 +3212,20 @@ fn test_enums_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 19 steps + 5 call_entry + 5 call_exit = 29 events.
-    assert_eq!(events.len(), 29, "events.len()");
+    // 19 steps + 6 call_entry + 6 call_exit = 31 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 31, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "classify".to_string(),
             "classify".to_string(),
-            "classify".to_string(),
+            "classify".to_string()
         ]
     );
     assert_eq!(
@@ -3083,6 +3236,7 @@ fn test_enums_test_via_ct_print_full() {
             "classify".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -3149,7 +3303,7 @@ fn test_enums_test_via_ct_print_full() {
     // ----- classify returns the case index in source order ----------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(1), Some(2), Some(3), Some(9), Some(9)]
+        vec![Some(1), Some(2), Some(3), Some(9), Some(9), None]
     );
 }
 
@@ -3194,7 +3348,7 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "compute", "Account.init", "deposit"],
+        vec!["<toplevel>", "main", "compute", "Account.init", "deposit"],
     );
 
     // ----- counts -----------------------------------------------------
@@ -3203,7 +3357,7 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
     // resource_destroy) + 1 implicit start step = 19 step records.
     assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
     // main, compute, deposit × 3 = 5 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy) + 2 errors
     // (pre-condition fail + post-condition fail) = 4 io_events.  The
     // PASSING pre/post evaluation in call 1 emits NO io_event — that
@@ -3216,19 +3370,20 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 19 steps + 5 call_entry + 5 call_exit + 4 io = 33 events.
-    assert_eq!(events.len(), 33, "events.len()");
+    // 19 steps + 6 call_entry + 6 call_exit + 4 io = 35 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 35, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering: main → compute → deposit×3 ---------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "deposit".to_string(),
             "deposit".to_string(),
-            "deposit".to_string(),
+            "deposit".to_string()
         ]
     );
     assert_eq!(
@@ -3239,6 +3394,7 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
             "deposit".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -3279,7 +3435,7 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
     //                main = 125 -------------------------------------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(125), None, None, Some(125), Some(125)]
+        vec![Some(125), None, None, Some(125), Some(125), None]
     );
 
     // ----- after1 captured in compute as ValueRecord::Int ------------
@@ -3321,14 +3477,17 @@ fn test_events_emit_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "do_transfer", "do_mint"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "do_transfer", "do_mint"]
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 7 explicit step events + 1 implicit start step = 8 step records.
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
     // main, compute, do_transfer, do_mint = 4 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
     // 2 emit events.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -3337,8 +3496,8 @@ fn test_events_emit_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 8 steps + 4 call_entry + 4 call_exit + 2 io = 18 events.
-    assert_eq!(events.len(), 18, "events.len()");
+    // 8 steps + 5 call_entry + 5 call_exit + 2 io = 20 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 20, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- IO events: tagged CadenceEmit:<Name>(...) text payload ---
@@ -3463,7 +3622,7 @@ fn test_events_emit_test_via_ct_print_full() {
     // ----- Returns: do_transfer=Void, do_mint=Void, compute=0, main=0 -
     assert_eq!(
         observed_int_returns(&doc),
-        vec![None, None, Some(0), Some(0)]
+        vec![None, None, Some(0), Some(0), None]
     );
 }
 
@@ -3510,6 +3669,7 @@ fn test_interfaces_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "MyVault.init",
@@ -3532,7 +3692,7 @@ fn test_interfaces_test_via_ct_print_full() {
     // (×2) and resource_destroy (×2) + 1 implicit start step = 18.
     assert_eq!(counts["steps"].as_u64(), Some(18), "steps; counts={counts}");
     // main, compute, consume, Provider.provide, MyVault.provide = 5.
-    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 4 resource lifecycle events (create + destroy of MyVault and Vault).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -3541,35 +3701,41 @@ fn test_interfaces_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 18 steps + 5 call_entry + 5 call_exit + 4 io = 32 events.
-    assert_eq!(events.len(), 32, "events.len()");
+    // 18 steps + 6 call_entry + 6 call_exit + 4 io = 34 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 34, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence: interface frame entered before concrete ---
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "consume".to_string(),
             "Provider.provide".to_string(),
-            "MyVault.provide".to_string(),
+            "MyVault.provide".to_string()
         ]
     );
-    // Re-pinned against trace-format-nim eec665b: call_key is now
-    // allocated at registerCall and completed CallRecords are flushed
-    // from the buffer in entry-key order, so the call_exit sequence
-    // begins with the interface frame before the concrete one and ends
-    // with main/compute in entry order rather than the previous LIFO
-    // order.
+    // ----- Call exit order: innermost frame first ---------------------
+    // A call's record spans `[first_step_id, last_step_id]` and names its
+    // `parent_key` / `children_keys` (trace-events.md §"Call Stream
+    // (`calls.dat`)"), so a child's range lies inside its parent's and a
+    // parent's exit is the last event of its subtree.  Frames that are still
+    // open when the recording ends all report the final step as their exit
+    // step; the event order is then the only thing that tells them apart, and
+    // the innermost one closes first.
+    // The concrete `MyVault.provide` frame is entered from inside the
+    // `Provider.provide` interface frame, so it is the one that closes first.
     assert_eq!(
         observed_call_exit_sequence(&doc),
         vec![
-            "Provider.provide".to_string(),
             "MyVault.provide".to_string(),
+            "Provider.provide".to_string(),
             "consume".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -3657,7 +3823,7 @@ fn test_interfaces_test_via_ct_print_full() {
         .filter(|e| e["kind"] == "call_exit")
         .map(|e| &e["return_value"])
         .collect();
-    assert_eq!(returns.len(), 5);
+    assert_eq!(returns.len(), 6);
     // MyVault.provide return: typed Struct (Vault, 8002, alice).
     assert_eq!(returns[0]["kind"].as_str(), Some("Struct"));
     let r0_fields = returns[0]["field_values"].as_array().unwrap();
@@ -3675,6 +3841,8 @@ fn test_interfaces_test_via_ct_print_full() {
     assert_eq!(returns[3]["i"].as_i64(), Some(77));
     assert_eq!(returns[4]["kind"].as_str(), Some("Int"));
     assert_eq!(returns[4]["i"].as_i64(), Some(77));
+    // The `<toplevel>` root `start` opens carries the VoidReturn marker.
+    assert_eq!(returns[5]["kind"].as_str(), Some("Void"));
 }
 
 // --- resource_collections_test.cdc ---------------------------------------
@@ -3721,7 +3889,10 @@ fn test_resource_collections_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "Vault.init"]
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -3730,7 +3901,7 @@ fn test_resource_collections_test_via_ct_print_full() {
     // start step = 29 step records.
     assert_eq!(counts["steps"].as_u64(), Some(29), "steps; counts={counts}");
     // main + compute = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 5 lifecycle creates + 5 lifecycle destroys = 10 io_events.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -3739,18 +3910,26 @@ fn test_resource_collections_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 29 steps + 2 call_entry + 2 call_exit + 10 io = 43 events.
-    assert_eq!(events.len(), 43, "events.len()");
+    // 29 steps + 3 call_entry + 3 call_exit + 10 io = 45 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 45, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
-        vec!["main".to_string(), "compute".to_string()]
+        vec![
+            "<toplevel>".to_string(),
+            "main".to_string(),
+            "compute".to_string()
+        ]
     );
     assert_eq!(
         observed_call_exit_sequence(&doc),
-        vec!["compute".to_string(), "main".to_string()]
+        vec![
+            "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
+        ]
     );
 
     // ----- @[Vault] surfaces as Sequence of typed Struct snapshots ---
@@ -3907,7 +4086,7 @@ fn test_resource_collections_test_via_ct_print_full() {
     );
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- access_control_test.cdc ---------------------------------------------
@@ -3951,6 +4130,7 @@ fn test_access_control_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "Vault.reveal_self",
@@ -3965,7 +4145,7 @@ fn test_access_control_test_via_ct_print_full() {
     // 11 explicit step events + 1 implicit start step = 12 step records.
     assert_eq!(counts["steps"].as_u64(), Some(12), "steps; counts={counts}");
     // main + compute + 4 reveal_* = 6 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
     // 6 visibility-tag io_events (one per call_entry).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -3974,20 +4154,21 @@ fn test_access_control_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 12 steps + 6 call_entry + 6 call_exit + 6 io = 30 events.
-    assert_eq!(events.len(), 30, "events.len()");
+    // 12 steps + 7 call_entry + 7 call_exit + 6 io = 32 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 32, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "Vault.reveal_self".to_string(),
             "Vault.reveal_contract".to_string(),
             "Vault.reveal_account".to_string(),
-            "Vault.reveal_all".to_string(),
+            "Vault.reveal_all".to_string()
         ]
     );
     assert_eq!(
@@ -3999,6 +4180,7 @@ fn test_access_control_test_via_ct_print_full() {
             "Vault.reveal_all".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -4059,6 +4241,7 @@ fn test_access_control_test_via_ct_print_full() {
             Some(1000),
             Some(1111),
             Some(1111),
+            None
         ]
     );
 }
@@ -4105,7 +4288,10 @@ fn test_optional_chaining_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "Vault.init", "Box.init"],);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "Vault.init", "Box.init"],
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -4114,7 +4300,7 @@ fn test_optional_chaining_test_via_ct_print_full() {
     // 1 implicit start step).
     assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
     // main + compute = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 6 lifecycle io_events + 1 ForceNilUnwrap = 7.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -4123,18 +4309,26 @@ fn test_optional_chaining_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 20 steps + 2 call_entry + 2 call_exit + 7 io = 31 events.
-    assert_eq!(events.len(), 31, "events.len()");
+    // 20 steps + 3 call_entry + 3 call_exit + 7 io = 33 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 33, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
-        vec!["main".to_string(), "compute".to_string()]
+        vec![
+            "<toplevel>".to_string(),
+            "main".to_string(),
+            "compute".to_string()
+        ]
     );
     assert_eq!(
         observed_call_exit_sequence(&doc),
-        vec!["compute".to_string(), "main".to_string()]
+        vec![
+            "compute".to_string(),
+            "main".to_string(),
+            "<toplevel>".to_string()
+        ]
     );
 
     // ----- chained: Variant { Some(Int 42) } -------------------------
@@ -4210,7 +4404,7 @@ fn test_optional_chaining_test_via_ct_print_full() {
     }
 
     // ----- Returns: compute=7, main=7 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(7), Some(7)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(7), Some(7), None]);
 }
 
 // --- scripts_test.cdc ---------------------------------------------------
@@ -4252,7 +4446,7 @@ fn test_scripts_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "MarketContract.floor_price"],
+        vec!["<toplevel>", "main", "MarketContract.floor_price"],
         "Imported-contract qualified name must resolve verbatim — \
          the script-form `main` plus the imported \
          `MarketContract.floor_price` are the only two entries in the \
@@ -4264,7 +4458,7 @@ fn test_scripts_test_via_ct_print_full() {
     // 3 explicit step events + 1 implicit start step = 4 step records.
     assert_eq!(counts["steps"].as_u64(), Some(4), "steps; counts={counts}");
     // main + MarketContract.floor_price = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 2 access tags (main + floor_price) + 1 script-entry tag = 3.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -4273,8 +4467,8 @@ fn test_scripts_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 4 steps + 2 call_entry + 2 call_exit + 3 io = 11 events.
-    assert_eq!(events.len(), 11, "events.len()");
+    // 4 steps + 3 call_entry + 3 call_exit + 3 io = 13 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 13, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Tagged io_events: access(main) → script-entry → access(...) -
@@ -4311,7 +4505,7 @@ fn test_scripts_test_via_ct_print_full() {
     );
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(12345), Some(12345)],
+        vec![Some(12345), Some(12345), None],
         "MarketContract.floor_price and main both return UInt64 12345 \
          as a typed ValueRecord::Int"
     );
@@ -4371,6 +4565,7 @@ fn test_hash_builtins_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "HashAlgorithm.SHA2_256.hash",
@@ -4383,7 +4578,7 @@ fn test_hash_builtins_test_via_ct_print_full() {
     // 6 explicit step events + 1 implicit start step = 7 step records.
     assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
     // main + compute + 2 hash calls = 4 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(5), "calls; counts={counts}");
     // No io_events (hash builtins do not route through any tagged
     // io channel).
     assert_eq!(
@@ -4393,18 +4588,19 @@ fn test_hash_builtins_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 7 steps + 4 call_entry + 4 call_exit + 0 io = 15 events.
-    assert_eq!(events.len(), 15, "events.len()");
+    // 7 steps + 5 call_entry + 5 call_exit + 0 io = 17 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 17, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "HashAlgorithm.SHA2_256.hash".to_string(),
-            "HashAlgorithm.SHA3_256.hash".to_string(),
+            "HashAlgorithm.SHA3_256.hash".to_string()
         ]
     );
     assert_eq!(
@@ -4414,6 +4610,7 @@ fn test_hash_builtins_test_via_ct_print_full() {
             "HashAlgorithm.SHA3_256.hash".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -4633,14 +4830,14 @@ fn test_path_types_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 6 explicit step events + 1 implicit start step = 7 step records.
     assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
     // main + compute = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // No io_events: Path values are pure typed locals.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -4649,8 +4846,8 @@ fn test_path_types_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 7 steps + 2 call_entry + 2 call_exit + 0 io = 11 events.
-    assert_eq!(events.len(), 11, "events.len()");
+    // 7 steps + 3 call_entry + 3 call_exit + 0 io = 13 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 13, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each Path local decodes as Struct { domain, identifier } --
@@ -4707,7 +4904,7 @@ fn test_path_types_test_via_ct_print_full() {
     );
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- anyresource_anystruct_test.cdc -------------------------------------
@@ -4764,17 +4961,25 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "compute", "Vault.init", "store", "process"],
+        vec![
+            "<toplevel>",
+            "main",
+            "compute",
+            "Vault.init",
+            "store",
+            "process"
+        ],
     );
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "store".to_string(),
-            "process".to_string(),
+            "process".to_string()
         ]
     );
     assert_eq!(
@@ -4784,6 +4989,7 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
             "process".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -4875,7 +5081,7 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
     // ----- Returns: store=Void, process=0, compute=0, main=0 ---------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![None, Some(0), Some(0), Some(0)]
+        vec![None, Some(0), Some(0), Some(0), None]
     );
 }
 
@@ -4926,16 +5132,23 @@ fn test_composite_types_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "compute", "C.create_vault", "C.Vault.init"],
+        vec![
+            "<toplevel>",
+            "main",
+            "compute",
+            "C.create_vault",
+            "C.Vault.init"
+        ],
     );
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
-            "C.create_vault".to_string(),
+            "C.create_vault".to_string()
         ]
     );
     assert_eq!(
@@ -4944,6 +5157,7 @@ fn test_composite_types_test_via_ct_print_full() {
             "C.create_vault".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -5111,7 +5325,12 @@ fn test_contracts_imports_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         functions,
-        vec!["main", "A.0x01.ContractA.foo", "A.0x02.ContractB.bar"],
+        vec![
+            "<toplevel>",
+            "main",
+            "A.0x01.ContractA.foo",
+            "A.0x02.ContractB.bar"
+        ],
         "Imported-contract qualified names must resolve verbatim — \
          the entry `main` plus each `A.<address>.<Contract>.<member>` \
          carries no truncation, no re-rendering."
@@ -5123,7 +5342,7 @@ fn test_contracts_imports_test_via_ct_print_full() {
     // step with the first same-source-line step → 6 step records.
     assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
     // main + A.0x01.ContractA.foo + A.0x02.ContractB.bar = 3 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
     // Three distinct source files surface in the per-step paths
     // table: the entry `contracts_imports_test.cdc` plus each
     // imported contract's source.
@@ -5140,17 +5359,18 @@ fn test_contracts_imports_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 6 steps + 3 call_entry + 3 call_exit + 0 io = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    // 6 steps + 4 call_entry + 4 call_exit + 0 io = 14 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "A.0x01.ContractA.foo".to_string(),
-            "A.0x02.ContractB.bar".to_string(),
+            "A.0x02.ContractB.bar".to_string()
         ]
     );
     assert_eq!(
@@ -5159,6 +5379,7 @@ fn test_contracts_imports_test_via_ct_print_full() {
             "A.0x01.ContractA.foo".to_string(),
             "A.0x02.ContractB.bar".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -5213,7 +5434,7 @@ fn test_contracts_imports_test_via_ct_print_full() {
     // ----- Returns: ContractA.foo=11, ContractB.bar=22, main=33 ------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(11), Some(22), Some(33)]
+        vec![Some(11), Some(22), Some(33), None]
     );
 
     // ----- Locals: x=11, y=22 ----------------------------------------
@@ -5264,7 +5485,7 @@ fn test_fixed_point_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -5273,7 +5494,7 @@ fn test_fixed_point_test_via_ct_print_full() {
     // 8 step records total.
     assert_eq!(counts["steps"].as_u64(), Some(8), "steps; counts={counts}");
     // main + compute = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // No io_events: fixed-point locals are pure typed scalars.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -5282,8 +5503,8 @@ fn test_fixed_point_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 8 steps + 2 call_entry + 2 call_exit + 0 io = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    // 8 steps + 3 call_entry + 3 call_exit + 0 io = 14 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each Fix64 / UFix64 local decodes as a scaled Int ---------
@@ -5331,7 +5552,7 @@ fn test_fixed_point_test_via_ct_print_full() {
     );
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // ---------------------------------------------------------------------------
@@ -5412,6 +5633,7 @@ fn test_string_operations_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "main",
             "compute",
             "String.concat",
@@ -5426,7 +5648,7 @@ fn test_string_operations_test_via_ct_print_full() {
     // 8 explicit step events + 1 implicit start step = 9 step records.
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
     // main + compute + 4 String methods = 6 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
     // No io_events (String methods are pure).
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -5435,20 +5657,21 @@ fn test_string_operations_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 9 steps + 6 call_entry + 6 call_exit + 0 io = 21 events.
-    assert_eq!(events.len(), 21, "events.len()");
+    // 9 steps + 7 call_entry + 7 call_exit + 0 io = 23 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 23, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering: each method invoked exactly once -----------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
             "String.concat".to_string(),
             "String.slice".to_string(),
             "String.utf8".to_string(),
-            "String.length".to_string(),
+            "String.length".to_string()
         ]
     );
     assert_eq!(
@@ -5460,6 +5683,7 @@ fn test_string_operations_test_via_ct_print_full() {
             "String.length".to_string(),
             "compute".to_string(),
             "main".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
@@ -5510,7 +5734,10 @@ fn test_string_operations_test_via_ct_print_full() {
             )
         })
         .collect();
-    assert_eq!(returns.len(), 6);
+    // Four String methods, then compute, main, and the `<toplevel>` frame
+    // `start` opens (`trace-events.md` §"Recorder Integration — Starting a
+    // Recording").
+    assert_eq!(returns.len(), 7);
 
     // String.concat → "hello world"
     assert_eq!(returns[0].0, "String.concat");
@@ -5548,6 +5775,11 @@ fn test_string_operations_test_via_ct_print_full() {
     assert_eq!(returns[5].0, "main");
     assert_eq!(returns[5].1["kind"].as_str(), Some("Int"));
     assert_eq!(returns[5].1["i"].as_i64(), Some(5));
+
+    // The `<toplevel>` root never returns a value: the writer finalizes it
+    // with the VoidReturn marker.
+    assert_eq!(returns[6].0, "<toplevel>");
+    assert_eq!(returns[6].1["kind"].as_str(), Some("Void"));
 }
 
 // --- byte_arrays_test.cdc ----------------------------------------------
@@ -5582,7 +5814,7 @@ fn test_byte_arrays_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -5590,7 +5822,7 @@ fn test_byte_arrays_test_via_ct_print_full() {
     // entry-call same-source-line marker = 7 step records.
     assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
     // main + compute = 2 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -5598,8 +5830,8 @@ fn test_byte_arrays_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 7 steps + 2 call_entry + 2 call_exit + 0 io = 11 events.
-    assert_eq!(events.len(), 11, "events.len()");
+    // 7 steps + 3 call_entry + 3 call_exit + 0 io = 13 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 13, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- bytes local: Sequence<Int> over [0xDE, 0xAD, 0xBE, 0xEF] --
@@ -5628,7 +5860,7 @@ fn test_byte_arrays_test_via_ct_print_full() {
     );
 
     // ----- Returns: compute=4, main=4 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(4), Some(4)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(4), Some(4), None]);
 }
 
 // --- crypto_signatures_test.cdc ----------------------------------------
@@ -5666,14 +5898,17 @@ fn test_crypto_signatures_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "PublicKey.verify"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "PublicKey.verify"]
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 5 explicit step events + 1 implicit start step = 6 step records.
     assert_eq!(counts["steps"].as_u64(), Some(6), "steps; counts={counts}");
     // main + compute + PublicKey.verify = 3 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -5681,17 +5916,18 @@ fn test_crypto_signatures_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 6 steps + 3 call_entry + 3 call_exit + 0 io = 12 events.
-    assert_eq!(events.len(), 12, "events.len()");
+    // 6 steps + 4 call_entry + 4 call_exit + 0 io = 14 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 14, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "main".to_string(),
             "compute".to_string(),
-            "PublicKey.verify".to_string(),
+            "PublicKey.verify".to_string()
         ]
     );
 
@@ -5812,13 +6048,13 @@ fn test_type_aliases_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute"]);
+    assert_eq!(functions, vec!["<toplevel>", "main", "compute"]);
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
     // 4 explicit step events + 1 implicit start step = 5 step records.
     assert_eq!(counts["steps"].as_u64(), Some(5), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 1 type-alias io_event.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -5827,8 +6063,8 @@ fn test_type_aliases_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 5 steps + 2 call_entry + 2 call_exit + 1 io = 10 events.
-    assert_eq!(events.len(), 10, "events.len()");
+    // 5 steps + 3 call_entry + 3 call_exit + 1 io = 12 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 12, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Tagged CadenceTypeAlias io_event --------------------------
@@ -5869,7 +6105,7 @@ fn test_type_aliases_test_via_ct_print_full() {
     assert_eq!(amount_var["value"]["i"].as_i64(), Some(150_000_000));
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- attachments_test.cdc ----------------------------------------------
@@ -5911,7 +6147,10 @@ fn test_attachments_test_via_ct_print_full() {
         .iter()
         .filter_map(|v| v.as_str())
         .collect();
-    assert_eq!(functions, vec!["main", "compute", "Vault.init"]);
+    assert_eq!(
+        functions,
+        vec!["<toplevel>", "main", "compute", "Vault.init"]
+    );
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
@@ -5920,7 +6159,7 @@ fn test_attachments_test_via_ct_print_full() {
     // routes through `register_step` ahead of the per-resource
     // typed local) = 9 step records.
     assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
-    assert_eq!(counts["calls"].as_u64(), Some(2), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // resource_create + resource_destroy + attach + remove = 4 io_events.
     assert_eq!(
         counts["io_events"].as_u64(),
@@ -5929,8 +6168,8 @@ fn test_attachments_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 9 steps + 2 call_entry + 2 call_exit + 4 io = 17 events.
-    assert_eq!(events.len(), 17, "events.len()");
+    // 9 steps + 3 call_entry + 3 call_exit + 4 io = 19 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 19, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Tagged attachment io_events (attach / remove pair) --------
@@ -5983,7 +6222,7 @@ fn test_attachments_test_via_ct_print_full() {
     assert_eq!(attached_fields[0]["text"].as_str(), Some("primary"));
 
     // ----- Returns: compute=0, main=0 --------------------------------
-    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0)]);
+    assert_eq!(observed_int_returns(&doc), vec![Some(0), Some(0), None]);
 }
 
 // --- multi_test_entry_test.cdc -----------------------------------------
@@ -6027,6 +6266,7 @@ fn test_multi_test_entry_test_via_ct_print_full() {
     assert_eq!(
         functions,
         vec![
+            "<toplevel>",
             "testFoo",
             "helperFoo",
             "testBar",
@@ -6044,7 +6284,7 @@ fn test_multi_test_entry_test_via_ct_print_full() {
     // 9 explicit step events + 1 implicit start step at the entry.
     assert_eq!(counts["steps"].as_u64(), Some(10), "steps; counts={counts}");
     // 3 entries + 3 helpers = 6 calls.
-    assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
+    assert_eq!(counts["calls"].as_u64(), Some(7), "calls; counts={counts}");
     assert_eq!(
         counts["io_events"].as_u64(),
         Some(0),
@@ -6052,20 +6292,21 @@ fn test_multi_test_entry_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 10 steps + 6 call_entry + 6 call_exit + 0 io = 22 events.
-    assert_eq!(events.len(), 22, "events.len()");
+    // 10 steps + 7 call_entry + 7 call_exit + 0 io = 24 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 24, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each entry's call subtree is independent and ordered ------
     assert_eq!(
         observed_call_entry_sequence(&doc),
         vec![
+            "<toplevel>".to_string(),
             "testFoo".to_string(),
             "helperFoo".to_string(),
             "testBar".to_string(),
             "helperBar".to_string(),
             "testBaz".to_string(),
-            "helperBaz".to_string(),
+            "helperBaz".to_string()
         ]
     );
     assert_eq!(
@@ -6077,13 +6318,14 @@ fn test_multi_test_entry_test_via_ct_print_full() {
             "testBar".to_string(),
             "helperBaz".to_string(),
             "testBaz".to_string(),
+            "<toplevel>".to_string()
         ]
     );
 
     // ----- Per-entry return values pinned ----------------------------
     assert_eq!(
         observed_int_returns(&doc),
-        vec![Some(1), Some(1), Some(2), Some(2), Some(3), Some(3)],
+        vec![Some(1), Some(1), Some(2), Some(2), Some(3), Some(3), None],
         "Each entry's helper returns its index (1/2/3); the entry \
          passes the helper's return through unchanged so each subtree \
          exits with the same Int payload."
