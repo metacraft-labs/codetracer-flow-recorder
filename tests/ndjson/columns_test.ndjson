@@ -1,0 +1,14 @@
+{"type":"call","name":"main"}
+{"type":"step","file":"columns_test.cdc","line":14,"column":12}
+{"type":"call","name":"compute"}
+{"type":"step","file":"columns_test.cdc","line":8,"column":5}
+{"type":"variable","name":"a","value":"1","cadence_type":"Int"}
+{"type":"step","file":"columns_test.cdc","line":9,"column":5}
+{"type":"step","file":"columns_test.cdc","line":9,"column":17}
+{"type":"variable","name":"b","value":"22","cadence_type":"Int"}
+{"type":"step","file":"columns_test.cdc","line":10,"column":5}
+{"type":"call","name":"OnChain.settle"}
+{"type":"step","file":"columns_test_onchain.cdc","line":3,"column":9}
+{"type":"return","value":"7","cadence_type":"Int"}
+{"type":"return","value":"22","cadence_type":"Int"}
+{"type":"return","value":"22","cadence_type":"Int"}
