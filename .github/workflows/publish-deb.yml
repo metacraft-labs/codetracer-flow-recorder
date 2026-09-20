@@ -44,7 +44,7 @@ on:
 
 jobs:
   build-and-publish-deb:
-    runs-on: [self-hosted, nixos]
+    runs-on: [self-hosted, linux, x64]
     name: deb / ${{ inputs.arch || 'amd64' }}
     environment: deb
     env:
