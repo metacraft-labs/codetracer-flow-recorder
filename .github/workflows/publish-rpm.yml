@@ -46,7 +46,7 @@ on:
 
 jobs:
   build-and-publish-rpm:
-    runs-on: [self-hosted, nixos]
+    runs-on: [self-hosted, linux, x64]
     name: rpm / ${{ inputs.arch || 'x86_64' }}
     environment: rpm
     env:
