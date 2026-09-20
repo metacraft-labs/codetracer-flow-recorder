@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   refresh-formula:
-    runs-on: [self-hosted, nixos]
+    runs-on: [self-hosted, linux, x64]
     name: refresh codetracer-flow-recorder.rb
     environment: homebrew
     steps:
