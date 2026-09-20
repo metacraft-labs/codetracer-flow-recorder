@@ -32,7 +32,7 @@ permissions:
 
 jobs:
   refresh-manifest:
-    runs-on: [self-hosted, nixos]
+    runs-on: [self-hosted, linux, x64]
     name: refresh codetracer-flow-recorder.json
     environment: scoop
     steps:
