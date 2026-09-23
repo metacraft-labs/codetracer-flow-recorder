@@ -47,6 +47,39 @@
             pkgs.rustfmt
             pkgs.clippy
           ];
+
+          # `cargo <subcommand>` looks for `cargo-<subcommand>` in
+          # `$CARGO_HOME/bin` BEFORE it searches PATH. On any machine with
+          # rustup — including the self-hosted macOS runner — that directory
+          # holds rustup's proxies, so `cargo fmt` and `cargo clippy` run
+          # rustup's `cargo-fmt` / `cargo-clippy` instead of the ones above,
+          # and fail with "'cargo-fmt' is not installed for the toolchain".
+          #
+          # The shell therefore gets its own CARGO_HOME with an empty `bin/`,
+          # so subcommand lookup falls through to PATH. `registry/` and `git/`
+          # are symlinks to the real CARGO_HOME, and so are its config and
+          # credentials when present: the download cache is shared, and only
+          # the proxy directory is left behind.
+          shellHook = ''
+            _flow_real_cargo_home="''${CARGO_HOME:-$HOME/.cargo}"
+            _flow_cargo_home="''${XDG_CACHE_HOME:-$HOME/.cache}/codetracer-flow-recorder/cargo-home"
+            if [ "$_flow_real_cargo_home" != "$_flow_cargo_home" ]; then
+              mkdir -p "$_flow_cargo_home" \
+                "$_flow_real_cargo_home/registry" "$_flow_real_cargo_home/git"
+              # Re-pointed on every entry, so a changed CARGO_HOME is followed
+              # rather than left sharing the previous one's cache. Only a link
+              # is ever replaced; a real file placed here is left alone.
+              for _flow_entry in registry git config.toml credentials.toml; do
+                if [ -e "$_flow_real_cargo_home/$_flow_entry" ] &&
+                  { [ -L "$_flow_cargo_home/$_flow_entry" ] ||
+                    [ ! -e "$_flow_cargo_home/$_flow_entry" ]; }; then
+                  ln -sfn "$_flow_real_cargo_home/$_flow_entry" "$_flow_cargo_home/$_flow_entry"
+                fi
+              done
+              export CARGO_HOME="$_flow_cargo_home"
+            fi
+            unset _flow_real_cargo_home _flow_cargo_home _flow_entry
+          '';
         };
       }
     );
