@@ -1,4 +1,16 @@
-# Cross-repo siblings cloned by setup-dev-env at workspace-lock-pinned
-# revisions (see codetracer-specs/Testing/Cross-Repo-CI-Integration.md).
-codetracer-trace-format
-codetracer-trace-format-nim
+# Cross-repo siblings cloned by setup-dev-env, adjacent to this checkout.
+#
+# Each entry is `name=ref`, which clones `ref` directly. Without the `=ref`
+# half, clone-siblings resolves the revision from a per-commit WORKSPACE lock
+# published to the manifests repo — a workspace-level lock-storage opt-in this
+# project does not use. Reprobuild's vanilla behaviour is the solved-graph
+# `repro.lock` committed in this repo; there is no manifests-repo record for
+# any commit here, so every lane failed in `Setup dev env` before reaching a
+# build. Pinning the ref keeps the workspace lock out of the path entirely.
+#
+# `dev` is each sibling's mainline, which is what this recorder is developed
+# and tested against: the Nim writer's sources are compiled into
+# `codetracer_trace_writer_nim`'s static library at cargo build time, so the
+# two must be the pair the tests were written for.
+codetracer-trace-format=dev
+codetracer-trace-format-nim=dev

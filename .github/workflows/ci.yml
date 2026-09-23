@@ -68,8 +68,13 @@ jobs:
           set -euo pipefail
           OUTPUT=$(dev-exec cargo test --all-targets 2>&1) || { echo "$OUTPUT"; exit 1; }
           echo "$OUTPUT"
-          # Guard against silently empty test suites
-          if ! echo "$OUTPUT" | grep -qP "test result: ok\. [1-9]"; then
+          # Guard against silently empty test suites. Matched with bash's own
+          # `[[ =~ ]]` rather than grep: this line runs in the step shell, not
+          # under dev-exec, and on the self-hosted runners that PATH is a Nix
+          # profile with no grep in it. (`grep -P` is also GNU-only, so it
+          # could not have worked on macOS's BSD grep either way.)
+          zero_test_guard='test result: ok\. [1-9]'
+          if ! [[ "$OUTPUT" =~ $zero_test_guard ]]; then
             echo "::error::Zero tests passed — check that test binaries are compiling correctly"
             exit 1
           fi
