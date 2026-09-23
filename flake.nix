@@ -36,6 +36,16 @@
             # because the cadence dev shell doesn't pull in nim itself.
             pkgs.nim
             pkgs.nimble
+
+            # `cargo fmt` and `cargo clippy` for the CI lint steps. The
+            # inherited cadence shell supplies `rustc` and `cargo` but neither
+            # of these. They come from the same nixpkgs set as that `rustc` —
+            # `nixpkgs` follows `mcl-blockchain/nixpkgs` above — so they are
+            # built against the compiler that builds the crate. An independently
+            # pinned rustfmt can format differently from the one a developer
+            # runs, and a mismatched clippy can refuse to load at all.
+            pkgs.rustfmt
+            pkgs.clippy
           ];
         };
       }
