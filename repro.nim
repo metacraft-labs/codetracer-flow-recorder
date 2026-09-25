@@ -24,8 +24,11 @@
 ## Flow/Cadence: test corpus is pre-compiled Cadence artefacts.
 
 import repro_project_dsl
+import repro_dsl_stdlib/foreign_env
 
 package codetracer_flow_recorder:
+  defaultToolProvisioning (when defined(windows): tarball else: path)
+
   uses:
     # Rust toolchain — declared by version so the tarball-direct
     # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
@@ -62,6 +65,8 @@ package codetracer_flow_recorder:
     name: "codetracer-flow-recorder"
 
   devEnv:
+    when not defined(windows):
+      useFlakeDevShell()
     activity "default"
 
   build:
