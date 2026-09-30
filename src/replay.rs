@@ -172,7 +172,7 @@ fn replay_transaction_with_helper(
         .source_dir
         .as_deref()
         .unwrap_or_else(|| Path::new("."))
-        .join(format!("tx_{}.cdc", &config.tx_hash));
+        .join(format!("tx_{}.cdc", config.tx_hash));
 
     CadenceTracer::trace_program_from_events(&source_path, &events, out_dir)
 }
