@@ -1,16 +1,7 @@
-# Cross-repo siblings cloned by setup-dev-env, adjacent to this checkout.
-#
-# Each entry is `name=ref`, which clones `ref` directly. Without the `=ref`
-# half, clone-siblings resolves the revision from a per-commit WORKSPACE lock
-# published to the manifests repo — a workspace-level lock-storage opt-in this
-# project does not use. Reprobuild's vanilla behaviour is the solved-graph
-# `repro.lock` committed in this repo; there is no manifests-repo record for
-# any commit here, so every lane failed in `Setup dev env` before reaching a
-# build. Pinning the ref keeps the workspace lock out of the path entirely.
-#
-# `dev` is each sibling's mainline, which is what this recorder is developed
-# and tested against: the Nim writer's sources are compiled into
-# `codetracer_trace_writer_nim`'s static library at cargo build time, so the
-# two must be the pair the tests were written for.
-codetracer-trace-format=dev
-codetracer-trace-format-nim=dev
+# Cross-repo siblings cloned by setup-dev-env (clone-siblings), each at the
+# revision this commit's committed repro.lock pins for it -- the develop-set
+# siblings `repro lock refresh` records from the workspace manifest's
+# `depends` edges. To move a pin, check the sibling out at the new revision,
+# run `repro lock refresh` and commit repro.lock. Do not add `=<ref>` here.
+codetracer-trace-format
+codetracer-trace-format-nim
