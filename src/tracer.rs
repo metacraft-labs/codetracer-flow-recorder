@@ -772,6 +772,37 @@ pub struct CadenceTracer {
     /// (line, column)).  Mirrors the EVM recorder's
     /// `paths_with_line_lengths` set.
     paths_with_line_lengths: HashSet<PathBuf>,
+    /// The subset of those whose table is NON-EMPTY, i.e. the files that
+    /// actually have a column axis.
+    ///
+    /// A column is only addressable in a file the writer sized from its own
+    /// per-line table; a file registered with an empty one is sized by the
+    /// line-only fallback, where one address is one line — so a column folded
+    /// into that address names a LATER LINE, not a column. Sources that are
+    /// not on disk at the path the helper names (synthetic NDJSON fixtures,
+    /// anything built elsewhere) land here, which makes this the normal case
+    /// rather than an edge one.
+    paths_with_column_axis: HashSet<PathBuf>,
+    /// Whether the writer currently holds an open step for variables to
+    /// attach to.
+    ///
+    /// The writer buffers one step at a time: `register_step` opens it, and
+    /// the next step, call, or return flushes it together with every variable
+    /// staged in between.  A variable staged while nothing is open has no step
+    /// to attach to, so the writer invents one — on a column-aware trace a
+    /// zero-delta column nudge, which occupies an exec index that is not a
+    /// logical step.  The values ride along on that index and no real step's
+    /// `StepValues` ever reports them.
+    step_open: bool,
+    /// Variables staged while no step was open, held until the next step.
+    ///
+    /// The Cadence helper emits a binding's value AFTER the `return` of the
+    /// call that produced it (`let x = C.foo()` is `call` / `step` / `return`
+    /// / `variable x`), and a call's arguments before the callee's first body
+    /// step.  Both land in the gap.  They are in scope at the step that
+    /// follows, which is where trace-events.md §"Value Stream Events" puts
+    /// them: `StepValues` is "all variable values visible at this step".
+    deferred_vars: Vec<(String, ValueRecord)>,
 }
 
 /// FU-Column-Aware-Nav-Flow: compute the per-line UTF-8 byte-length
@@ -834,7 +865,44 @@ impl CadenceTracer {
                 err,
             );
         }
+        if !line_lengths.is_empty() {
+            self.paths_with_column_axis.insert(path.to_path_buf());
+        }
         self.paths_with_line_lengths.insert(path.to_path_buf());
+    }
+
+    /// The column to record for a step on `path`, or `None` when that file has
+    /// no column axis to place one on.
+    ///
+    /// Offering one anyway does not fail — it resolves to a different line,
+    /// which reads back as a plausible position that the program never
+    /// executed.
+    fn addressable_column(&self, path: &Path, column: Option<u32>) -> Option<Line> {
+        if self.paths_with_column_axis.contains(path) {
+            column.map(|c| Line(c as i64))
+        } else {
+            None
+        }
+    }
+
+    /// Emit a step at `(path, line, column)` and attach to it every variable
+    /// that was staged while no step was open.
+    ///
+    /// Every step the recorder emits goes through here, so the "a variable is
+    /// always registered against a step" invariant holds for the resource
+    /// lifecycle events as much as for plain `step` records.
+    fn open_step(&mut self, path: &Path, line: u32, column: Option<u32>) {
+        let addressable = self.addressable_column(path, column);
+        TraceWriter::register_step_with_column(
+            &mut *self.writer,
+            path,
+            Line(line as i64),
+            addressable,
+        );
+        self.step_open = true;
+        for (name, value) in std::mem::take(&mut self.deferred_vars) {
+            self.write_variable(&name, value);
+        }
     }
 
     /// Trace a Cadence program and write a CodeTracer CTFS bundle.
@@ -868,6 +936,9 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
+            step_open: false,
+            deferred_vars: Vec::new(),
         };
 
         // -- 3. Initialise output files --
@@ -959,6 +1030,9 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
+            step_open: false,
+            deferred_vars: Vec::new(),
         };
 
         // Initialise output files.
@@ -1020,6 +1094,9 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
+            step_open: false,
+            deferred_vars: Vec::new(),
         };
 
         // FU-Column-Aware-Nav-Flow: even on the
@@ -1069,22 +1146,17 @@ impl CadenceTracer {
                     // `ensure_path_with_line_lengths` for the
                     // already-interned / soft-fail contract.
                     self.ensure_path_with_line_lengths(&resolved);
-                    // FU-Column-Aware-Nav-Flow: forward the helper-side
-                    // column (already 1-based — the Go helper applied
-                    // the `+ 1` adjustment from Cadence's 0-based
-                    // `ast.Position.Column`) verbatim through the
-                    // column-aware Step encoder.  When the helper
-                    // omits the column (legacy NDJSON without column
-                    // info) we pass `None` — `enable_column_aware_steps`
-                    // remains set, so the trace's column-aware flag
-                    // survives and individual steps with `None` fall
-                    // back cleanly at read time.
-                    TraceWriter::register_step_with_column(
-                        &mut *self.writer,
-                        &resolved,
-                        Line(*line as i64),
-                        column.map(|c| Line(c as i64)),
-                    );
+                    // FU-Column-Aware-Nav-Flow: the helper-side column is
+                    // already 1-based (the Go helper applies the `+ 1`
+                    // adjustment from Cadence's 0-based
+                    // `ast.Position.Column`), so it goes to `open_step`
+                    // unchanged; `addressable_column` decides whether the
+                    // file can carry it.  When the helper omits the column
+                    // (legacy NDJSON without column info) the step is
+                    // line-only — `enable_column_aware_steps` remains set, so
+                    // the trace's column-aware flag survives and individual
+                    // steps with `None` fall back cleanly at read time.
+                    self.open_step(&resolved, *line, *column);
                 }
                 TraceEvent::Variable {
                     name,
@@ -1113,6 +1185,9 @@ impl CadenceTracer {
                         call_args.push(full_arg);
                     }
                     TraceWriter::register_call(&mut *self.writer, fn_id, call_args);
+                    // A call flushes the writer's pending step, so nothing is
+                    // open again until the callee's first body step.
+                    self.step_open = false;
 
                     // Emit a tagged visibility io_event when the
                     // helper-side `access` discriminator is present so
@@ -1146,15 +1221,21 @@ impl CadenceTracer {
                 TraceEvent::Return {
                     value,
                     cadence_type,
-                } => match value.as_deref() {
-                    None | Some("") | Some("nil") | Some("Void") => {
-                        TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
+                } => {
+                    match value.as_deref() {
+                        None | Some("") | Some("nil") | Some("Void") => {
+                            TraceWriter::register_return(&mut *self.writer, NONE_VALUE);
+                        }
+                        Some(v) => {
+                            let val = self.value_record(v, cadence_type.as_deref());
+                            self.register_typed_return(val);
+                        }
                     }
-                    Some(v) => {
-                        let val = self.value_record(v, cadence_type.as_deref());
-                        self.register_typed_return(val);
-                    }
-                },
+                    // A return flushes the writer's pending step, so the
+                    // binding the helper reports next belongs to the caller's
+                    // next step, not to the callee's last one.
+                    self.step_open = false;
+                }
                 TraceEvent::Error {
                     message,
                     error_kind,
@@ -1207,12 +1288,7 @@ impl CadenceTracer {
                     // events that don't carry a column) we pass
                     // `None` — the column-aware flag still surfaces
                     // on the trace.
-                    TraceWriter::register_step_with_column(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                        column.map(|c| Line(c as i64)),
-                    );
+                    self.open_step(source_path, *line, *column);
 
                     // Synthesise the implicit `<Type>.init` Cadence
                     // initializer in the function table so the function
@@ -1266,12 +1342,7 @@ impl CadenceTracer {
                 } => {
                     // FU-Column-Aware-Nav-Flow: column-aware step at
                     // the move site.  See `ResourceCreate` above.
-                    TraceWriter::register_step_with_column(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                        column.map(|c| Line(c as i64)),
-                    );
+                    self.open_step(source_path, *line, *column);
 
                     // Emit the resource as a variable showing the ownership transfer.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -1301,12 +1372,7 @@ impl CadenceTracer {
                 } => {
                     // FU-Column-Aware-Nav-Flow: column-aware step at
                     // the destroy site.  See `ResourceCreate` above.
-                    TraceWriter::register_step_with_column(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                        column.map(|c| Line(c as i64)),
-                    );
+                    self.open_step(source_path, *line, *column);
 
                     // Emit the resource as a variable showing destruction.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -1341,12 +1407,7 @@ impl CadenceTracer {
                     // ownership transition up against source.  See
                     // `ResourceCreate` above for the `column = None`
                     // contract.
-                    TraceWriter::register_step_with_column(
-                        &mut *self.writer,
-                        source_path,
-                        Line(*line as i64),
-                        column.map(|c| Line(c as i64)),
-                    );
+                    self.open_step(source_path, *line, *column);
 
                     // Tagged owner-change io event.  Multi-stream io
                     // writer drops the metadata field, so the
@@ -1536,6 +1597,14 @@ impl CadenceTracer {
                     );
                 }
             }
+        }
+
+        // No step follows, so these have nowhere better to go. Handing them to
+        // the writer anyway keeps them in `values.dat`, where a reader that
+        // walks the value stream can still find them; holding them here would
+        // discard them outright.
+        for (name, value) in std::mem::take(&mut self.deferred_vars) {
+            self.write_variable(&name, value);
         }
 
         Ok(())
@@ -2057,7 +2126,21 @@ impl CadenceTracer {
         }
     }
 
-    /// Register a step-local variable, preserving the value's typed
+    /// Stage a step-local variable against the open step, or hold it for the
+    /// next one when no step is open.
+    ///
+    /// See `step_open` for what a variable staged into the gap costs: the
+    /// writer parks it on an exec index that is not a logical step, and no
+    /// step's `StepValues` reports it afterwards.
+    fn register_typed_variable(&mut self, name: &str, value: ValueRecord) {
+        if self.step_open {
+            self.write_variable(name, value);
+        } else {
+            self.deferred_vars.push((name.to_string(), value));
+        }
+    }
+
+    /// Hand a variable to the writer, preserving the value's typed
     /// `ValueRecord` variant tag.
     ///
     /// The Nim writer's `register_variable_with_full_value` only
@@ -2068,7 +2151,7 @@ impl CadenceTracer {
     /// the typed leaf variants by encoding the value to CBOR via the
     /// streaming encoder (which honours the variant tag) and routing
     /// the bytes through `register_variable_cbor`.
-    fn register_typed_variable(&mut self, name: &str, value: ValueRecord) {
+    fn write_variable(&mut self, name: &str, value: ValueRecord) {
         match &value {
             ValueRecord::Bool { .. } | ValueRecord::String { .. } => {
                 let cbor = self.streaming_encoder.encode(&value).to_vec();
