@@ -1803,10 +1803,10 @@ const ERROR_PATHS_NDJSON: &str = include_str!("ndjson/error_paths_test.ndjson");
 ///     `panic("intentional panic for trace coverage")`.
 ///
 /// All three flow through `EventLogKind` events; the pre/post failures
-/// route through `EventLogKind::TraceLogEvent` (-> `ioStderr`) with a
+/// route through `EventLogKind::TraceLogEvent` (preserved by ct-print) with a
 /// `CadencePreCondition` / `CadencePostCondition` metadata tag, while
 /// the user `panic` keeps the historical `EventLogKind::Error`
-/// (-> `ioError`) channel.  The `#[ignore]`d sibling test asserts the
+/// (preserved as Error) channel.  The `#[ignore]`d sibling test asserts the
 /// looser `>=3` count guarantee; this strict test additionally pins
 /// the io_kind / text payload of every emitted event.
 #[test]
@@ -1922,8 +1922,8 @@ fn test_error_paths_test_via_ct_print_full() {
 
     // ----- IO events: pre-condition, post-condition, panic ------------
     // Three distinct entries.  Pre/post failures route through
-    // `EventLogKind::TraceLogEvent` (= `ioStderr`); the explicit panic
-    // keeps `EventLogKind::Error` (= `ioError`).  Order matches the
+    // `EventLogKind::TraceLogEvent` (preserved by ct-print); the explicit panic
+    // keeps `EventLogKind::Error` (preserved by ct-print).  Order matches the
     // emission order in the fixture.
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
@@ -1944,15 +1944,18 @@ fn test_error_paths_test_via_ct_print_full() {
         io_summary,
         vec![
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "pre-condition failed: denominator must be non-zero",
             ),
-            ("ioStderr", "post-condition failed: division must be exact",),
-            ("ioError", "intentional panic for trace coverage"),
+            (
+                "TraceLogEvent",
+                "post-condition failed: division must be exact",
+            ),
+            ("Error", "intentional panic for trace coverage"),
         ],
         "Pre/post-condition failures must route through `TraceLogEvent` \
-         (ioStderr) with a distinct text payload; the user-issued panic \
-         keeps the historical `Error` (ioError) channel."
+         (TraceLogEvent) with a distinct text payload; the user-issued panic \
+         keeps the historical `Error` (Error) channel."
     );
 }
 
@@ -1982,7 +1985,7 @@ const RESOURCE_CAPABILITY_NDJSON: &str = include_str!("ndjson/resource_capabilit
 /// on the **exact** event shape.  Cadence-specific coverage:
 /// resources (create / move-via-deposit / destroy).  The recorder
 /// surfaces resource lifecycle events through the special-event log
-/// (`EventLogKind::TraceLogEvent` → `ioStderr` in `ct-print --full`).
+/// (`EventLogKind::TraceLogEvent`, preserved by `ct-print --full`).
 ///
 /// Resource arguments to functions (e.g. the `coin: @Coin` parameter
 /// on `Vault.deposit`) decode as a typed
@@ -2072,7 +2075,7 @@ fn test_resource_capability_test_via_ct_print_full() {
         ],
     );
 
-    // ----- IO events: 4 ioStderr resource-log entries -----------------
+    // ----- IO events: 4 TraceLogEvent resource-log entries -----------------
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
         io_events.len(),
@@ -2082,8 +2085,8 @@ fn test_resource_capability_test_via_ct_print_full() {
     for io in &io_events {
         assert_eq!(
             io["io_kind"].as_str(),
-            Some("ioStderr"),
-            "resource events route through TraceLogEvent → ioStderr; \
+            Some("TraceLogEvent"),
+            "resource events route through TraceLogEvent; \
              got {io}"
         );
         // Each event payload follows the `owner=<address>` convention.
@@ -2228,7 +2231,7 @@ const CAPABILITIES_NDJSON: &str = include_str!("ndjson/capabilities_test.ndjson"
 /// the dereferenced payload.  Borrowed references (cadence_type `&Vault`)
 /// share the same Reference variant.  The publish / unpublish
 /// transitions surface as `event` NDJSON entries that route through
-/// `EventLogKind::EvmEvent` → `ioStderr` io_events with the path
+/// `EventLogKind::EvmEvent` (preserved by ct-print) io_events with the path
 /// captured in `text`.
 #[test]
 fn test_capabilities_test_via_ct_print_full() {
@@ -2351,7 +2354,7 @@ fn test_capabilities_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         io_summary,
-        vec![("ioStderr", "/public/Vault"), ("ioStderr", "/public/Vault"),],
+        vec![("EvmEvent", "/public/Vault"), ("EvmEvent", "/public/Vault"),],
         "capability publish/unpublish payloads"
     );
 
@@ -2698,7 +2701,7 @@ fn test_transactions_test_via_ct_print_full() {
         .collect();
     assert_eq!(phase_payloads, vec!["prepare", "execute", "post"]);
     for io in &io_events {
-        assert_eq!(io["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(io["io_kind"].as_str(), Some("EvmEvent"));
     }
 }
 
@@ -2989,7 +2992,7 @@ fn test_address_literals_test_via_ct_print_full() {
 //                                    Successful evaluations are silent;
 //                                    failures surface with
 //                                    `CadencePreCondition` / `CadencePostCondition`
-//                                    metadata routing through ioStderr.
+//                                    canonical EvmEvent metadata.
 //   * `events_emit_test`            — `event Foo(...)` declarations + `emit`.
 //                                    Each emit surfaces as a tagged
 //                                    `CadenceEmit:` io_event with all
@@ -3132,7 +3135,7 @@ fn test_resources_full_test_via_ct_print_full() {
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
 
     // Filter to just the owner-change events (the resource lifecycle
-    // create/destroy events also route through TraceLogEvent → ioStderr,
+    // create/destroy events also route through TraceLogEvent,
     // so we look for the literal `ResourceOwnerChange:` tag in `text`).
     let owner_changes: Vec<&str> = io_events
         .iter()
@@ -3153,13 +3156,13 @@ fn test_resources_full_test_via_ct_print_full() {
          shift, force-unwrap)"
     );
 
-    // Every owner-change event routes through TraceLogEvent → ioStderr.
+    // Every owner-change event routes through TraceLogEvent.
     for ev in io_events.iter().filter(|e| {
         e["text"]
             .as_str()
             .is_some_and(|t| t.starts_with("ResourceOwnerChange:"))
     }) {
-        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(ev["io_kind"].as_str(), Some("TraceLogEvent"));
     }
 
     // ----- Returns: compute=0, main=0 --------------------------------
@@ -3317,7 +3320,7 @@ const PRE_POST_NDJSON: &str = include_str!("ndjson/pre_post_conditions_test.ndjs
 /// Successful evaluations are silent (no io_event for the
 /// pre/post check itself).  Failed pre-conditions surface with the
 /// `CadencePreCondition` tag (routed through
-/// `EventLogKind::TraceLogEvent` → `ioStderr`); failed
+/// `EventLogKind::TraceLogEvent`, preserved by ct-print); failed
 /// post-conditions surface with `CadencePostCondition` (same
 /// channel, distinct text payload).  This tag-channel split — and
 /// the user-issued `panic` keeping the historical `Error` channel
@@ -3415,15 +3418,21 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
         io_summary,
         vec![
             // 1. Account create (lifecycle).
-            ("ioStderr", "owner=alice"),
+            ("TraceLogEvent", "owner=alice"),
             // 2. First failing call: pre-condition.
-            ("ioStderr", "pre-condition failed: amount must be positive"),
+            (
+                "TraceLogEvent",
+                "pre-condition failed: amount must be positive"
+            ),
             // 3. Second failing call: post-condition.
-            ("ioStderr", "post-condition failed: balance must increase"),
+            (
+                "TraceLogEvent",
+                "post-condition failed: balance must increase"
+            ),
             // 4. Account destroy (lifecycle).
-            ("ioStderr", "owner=alice"),
+            ("TraceLogEvent", "owner=alice"),
         ],
-        "Pre/post failures route through TraceLogEvent → ioStderr \
+        "Pre/post failures route through TraceLogEvent \
          with distinct text payloads.  The PASSING first call \
          (deposit(amount: 25) → returns 125) produces NO io_event — \
          the silence is what proves the pre/post tag dispatch is not \
@@ -3516,11 +3525,11 @@ fn test_events_emit_test_via_ct_print_full() {
         io_summary,
         vec![
             (
-                "ioStderr",
+                "EvmEvent",
                 "CadenceEmit:Transfer(amount: 12.5, from: 0x01, to: 0x02)",
             ),
             (
-                "ioStderr",
+                "EvmEvent",
                 "CadenceEmit:NFTMinted(id: 1001, metadata: {\"name\": \"Cat\", \"rarity\": \"common\"})",
             ),
         ],
@@ -4200,18 +4209,21 @@ fn test_access_control_test_via_ct_print_full() {
     assert_eq!(
         access_tags,
         vec![
-            ("ioStderr", "CadenceAccess:main:AccessAll"),
-            ("ioStderr", "CadenceAccess:compute:AccessAll"),
-            ("ioStderr", "CadenceAccess:Vault.reveal_self:AccessSelf"),
+            ("TraceLogEvent", "CadenceAccess:main:AccessAll"),
+            ("TraceLogEvent", "CadenceAccess:compute:AccessAll"),
             (
-                "ioStderr",
+                "TraceLogEvent",
+                "CadenceAccess:Vault.reveal_self:AccessSelf"
+            ),
+            (
+                "TraceLogEvent",
                 "CadenceAccess:Vault.reveal_contract:AccessContract",
             ),
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "CadenceAccess:Vault.reveal_account:AccessAccount",
             ),
-            ("ioStderr", "CadenceAccess:Vault.reveal_all:AccessAll"),
+            ("TraceLogEvent", "CadenceAccess:Vault.reveal_all:AccessAll"),
         ],
         "Each call frame must surface its source-declared visibility \
          tag through the CadenceAccess io_event channel — the strict \
@@ -4400,7 +4412,7 @@ fn test_optional_chaining_test_via_ct_print_full() {
             .as_str()
             .is_some_and(|t| t.starts_with("ForceNilUnwrap:"))
     }) {
-        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(ev["io_kind"].as_str(), Some("TraceLogEvent"));
     }
 
     // ----- Returns: compute=7, main=7 --------------------------------
@@ -4485,10 +4497,10 @@ fn test_scripts_test_via_ct_print_full() {
     assert_eq!(
         io_summary,
         vec![
-            ("ioStderr", "CadenceAccess:main:AccessAll"),
-            ("ioStderr", "CadenceScriptEntry:main"),
+            ("TraceLogEvent", "CadenceAccess:main:AccessAll"),
+            ("TraceLogEvent", "CadenceScriptEntry:main"),
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "CadenceAccess:MarketContract.floor_price:AccessAll",
             ),
         ],
@@ -5016,8 +5028,8 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
     assert_eq!(
         any_type_tags,
         vec![
-            ("ioStderr", "CadenceAnyType:AnyResource:Vault:r"),
-            ("ioStderr", "CadenceAnyType:AnyStruct:Token:s"),
+            ("TraceLogEvent", "CadenceAnyType:AnyResource:Vault:r"),
+            ("TraceLogEvent", "CadenceAnyType:AnyStruct:Token:s"),
         ],
         "Each dynamic-supertype binding surfaces as a tagged \
          CadenceAnyType:<static>:<runtime>:<varname> io_event so both \
@@ -5097,7 +5109,7 @@ const COMPOSITE_TYPES_NDJSON: &str = include_str!("ndjson/composite_types_test.n
 /// (`Structure` / `Resource` / `Event`).  The recorder surfaces each
 /// kind as a tagged io_event (`CompositeKindStructure:<Type>`,
 /// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
-/// through `EventLogKind::TraceLogEvent` → `ioStderr`.  The `event`
+/// through `EventLogKind::TraceLogEvent` (preserved by ct-print).  The `event`
 /// composite additionally surfaces as a tagged `CadenceEmit:` io_event
 /// when emitted (the existing M9 emit path).
 ///
@@ -5185,9 +5197,9 @@ fn test_composite_types_test_via_ct_print_full() {
     assert_eq!(
         composite_kind_tags,
         vec![
-            ("ioStderr", "CompositeKindStructure:C.Coord"),
-            ("ioStderr", "CompositeKindResource:C.Vault"),
-            ("ioStderr", "CompositeKindEvent:C.Spawned"),
+            ("TraceLogEvent", "CompositeKindStructure:C.Coord"),
+            ("TraceLogEvent", "CompositeKindResource:C.Vault"),
+            ("TraceLogEvent", "CompositeKindEvent:C.Spawned"),
         ],
         "Each composite-declaration kind surfaces with its canonical \
          `CompositeKind<Kind>:<Type>` tag, in struct → resource → event \
@@ -5211,7 +5223,7 @@ fn test_composite_types_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         emit_tags,
-        vec![("ioStderr", "CadenceEmit:C.Spawned(id: 1)")],
+        vec![("EvmEvent", "CadenceEmit:C.Spawned(id: 1)")],
         "Event-kind composites surface twice: once for the kind tag \
          (CompositeKindEvent), once for the emit-site tag \
          (CadenceEmit:<Name>(<args>))."
@@ -6081,7 +6093,7 @@ fn test_type_aliases_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         alias_tags,
-        vec![("ioStderr", "CadenceTypeAlias:Coin:UFix64")],
+        vec![("TraceLogEvent", "CadenceTypeAlias:Coin:UFix64")],
         "Type alias surfaces as a tagged CadenceTypeAlias:<Alias>:\
          <Underlying> io_event so downstream consumers can resolve \
          the alias → underlying linkage without re-parsing the source."
@@ -6187,8 +6199,8 @@ fn test_attachments_test_via_ct_print_full() {
     assert_eq!(
         attachment_tags,
         vec![
-            ("ioStderr", "CadenceAttachmentAttach:Logger:Vault"),
-            ("ioStderr", "CadenceAttachmentRemove:Logger:Vault"),
+            ("TraceLogEvent", "CadenceAttachmentAttach:Logger:Vault"),
+            ("TraceLogEvent", "CadenceAttachmentRemove:Logger:Vault"),
         ],
         "Each attach site surfaces with its `CadenceAttachmentAttach:\
          <Att>:<Target>` tag; each remove with the symmetric \
@@ -6349,9 +6361,9 @@ const COLUMNS_NDJSON: &str = include_str!("ndjson/columns_test.ndjson");
 /// thing that tells the two steps on it apart, and the fixture also steps
 /// through `columns_test_onchain.cdc`, which has no file on disk — the shape
 /// a Cadence `import` from an address produces, where the contract's source
-/// lives on chain and the recorder has nothing to read. That file gets no
-/// per-line table, so it has no column axis, and a column folded into its
-/// address would name a later line rather than a column.
+/// lives on chain and the recorder has nothing to read. Current Layout A
+/// assigns that successfully registered file the Conventional table:
+/// 100000 lines of 1024 positions. Its supplied column must survive.
 #[test]
 fn test_columns_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -6376,10 +6388,10 @@ fn test_columns_test_via_ct_print_full() {
     );
 
     // ----- Every step's resolved (file, line, column) -----------------
-    // `column` is absent, not zero, for a file with no column axis: the
-    // reader declines to decode one rather than inventing a value, and
-    // ct-print leaves the key off. `None` here means "the reader refused",
-    // which is the state the format asks for.
+    // The missing-source path has a current-format Conventional column
+    // axis. Its supplied line 3, column 9 has file-relative position
+    // (3 - 1) * 1024 + (9 - 1) = 2056. Line-only/Bare modes are distinct
+    // and retain their absent-column semantics.
     let positions: Vec<(String, i64, Option<i64>)> = doc["events"]
         .as_array()
         .expect("events array")
@@ -6419,11 +6431,10 @@ fn test_columns_test_via_ct_print_full() {
             ("columns_test.cdc".to_string(), 9, Some(17)),
             // `return b`
             ("columns_test.cdc".to_string(), 10, Some(5)),
-            // The on-chain contract: line 3, and NO column. Line 3 is the
-            // assertion that bites — a column of 9 folded into a line-only
-            // address resolves to line 11, a position this program never
-            // executed and one that reads back as entirely plausible.
-            ("columns_test_onchain.cdc".to_string(), 3, None),
+            // The on-chain contract has a Conventional table despite its
+            // missing source; preserve the actual helper column 9. The
+            // independent 2056-position calculation above pins the result.
+            ("columns_test_onchain.cdc".to_string(), 3, Some(9)),
         ],
     );
 
@@ -6462,4 +6473,156 @@ fn test_columns_test_via_ct_print_full() {
             "<toplevel>".to_string()
         ]
     );
+}
+
+/// Real recorder/container proof of the current Conventional table contract.
+/// No mocks: actual Cadence NDJSON is recorded, raw paths.dat bytes are read
+/// from the shipping CTFS container, and raw step addresses are checked using
+/// independently derived table sizes rather than decoded column values.
+#[test]
+fn test_missing_source_conventional_table_bytes_and_position() {
+    use codetracer_ctfs::CtfsReader;
+    use codetracer_trace_writer_nim::{NimTraceReaderHandle, PathTableKind};
+
+    let temporary = tempfile::tempdir().expect("owned recording scratch");
+    let output = temporary.path().join("traces");
+    let program = test_programs_dir().join("columns_test.cdc");
+    run_tracer_from_ndjson(COLUMNS_NDJSON, &program, &output);
+    let container = assert_valid_ct_file(&output);
+    let reader = NimTraceReaderHandle::open(container.to_str().expect("container path"))
+        .expect("open genuine recorder container");
+    assert!(reader.has_column_aware_steps());
+    let path_id = (0..reader.path_count())
+        .find(|id| {
+            reader
+                .path(*id)
+                .expect("registered path")
+                .ends_with("columns_test_onchain.cdc")
+        })
+        .expect("missing-source path was registered");
+    assert_eq!(
+        reader.path_table_kind(path_id),
+        Some(PathTableKind::Conventional)
+    );
+    assert_eq!(reader.line_count_raw(path_id), 100000);
+    assert_eq!(reader.line_length_raw(path_id, 2), Some(1024));
+
+    let mut archive = CtfsReader::open(&container).expect("read genuine CTFS bytes");
+    let paths = archive.read_file("paths.dat").expect("paths.dat bytes");
+    let offsets = archive.read_file("paths.off").expect("paths.off bytes");
+    assert_eq!(offsets.len() % 8, 0);
+    let offsets: Vec<usize> = offsets
+        .chunks_exact(8)
+        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()) as usize)
+        .collect();
+    let path = reader
+        .path(path_id)
+        .expect("registered missing-source path");
+    let mut length = path.len() as u64;
+    let mut expected_record = Vec::new();
+    loop {
+        let byte = (length & 0x7f) as u8;
+        length >>= 7;
+        expected_record.push(byte | if length == 0 { 0 } else { 0x80 });
+        if length == 0 {
+            break;
+        }
+    }
+    expected_record.extend_from_slice(path.as_bytes());
+    expected_record.push(0); // Compact Conventional count, with no line varints.
+    let id = path_id as usize;
+    assert_eq!(&paths[offsets[id]..offsets[id + 1]], expected_record);
+
+    let mut base = 0u64;
+    for earlier in 0..path_id {
+        base += match reader.path_table_kind(earlier).expect("earlier table kind") {
+            PathTableKind::Conventional => 100000 * 1024,
+            PathTableKind::Lines => (0..reader.line_count_raw(earlier))
+                .map(|line| {
+                    u64::from(
+                        reader
+                            .line_length_raw(earlier, line as u32)
+                            .expect("earlier table length"),
+                    )
+                })
+                .sum::<u64>(),
+            kind => panic!("column-aware recording contains incompatible table {kind:?}"),
+        };
+    }
+    let count = reader.step_count();
+    let mut positions = vec![0; count as usize];
+    let mut path_ids = vec![0; count as usize];
+    let mut lines = vec![0; count as usize];
+    assert_eq!(
+        reader
+            .step_global_line_indices(0, count, &mut positions)
+            .unwrap(),
+        count
+    );
+    assert_eq!(
+        reader
+            .step_locations(0, count, &mut path_ids, &mut lines)
+            .unwrap(),
+        count
+    );
+    let captured: Vec<u64> = positions
+        .iter()
+        .zip(path_ids.iter())
+        .filter(|(_, id)| **id == path_id)
+        .map(|(position, _)| *position - base)
+        .collect();
+    assert_eq!(captured, vec![(3 - 1) * 1024 + (9 - 1)]);
+}
+
+/// A real non-column-aware writer preserves the legacy Bare path format and
+/// missing columns. This control does not reinterpret empty Layout A tables.
+#[test]
+fn test_legacy_bare_path_retains_absent_column() {
+    use codetracer_trace_types::Line;
+    use codetracer_trace_writer_nim::{
+        NimTraceReaderHandle, NimTraceWriter, PathTableKind, TraceEventsFileFormat,
+    };
+    let temporary = tempfile::tempdir().expect("owned legacy recording scratch");
+    let mut writer = NimTraceWriter::new("legacy_bare_column", &[], TraceEventsFileFormat::Ctfs);
+    writer
+        .begin_writing_trace_events(&temporary.path().join("trace.json"))
+        .unwrap();
+    writer
+        .begin_writing_trace_metadata(&temporary.path().join("metadata.json"))
+        .unwrap();
+    writer
+        .begin_writing_trace_paths(&temporary.path().join("paths.json"))
+        .unwrap();
+    let source = temporary.path().join("legacy_source.cdc");
+    writer
+        .register_path_with_line_lengths(&source, &[])
+        .unwrap();
+    writer.register_step_with_column(&source, Line(3), None);
+    writer.close().expect("finalize real legacy container");
+    let container = assert_valid_ct_file(temporary.path());
+    let reader = NimTraceReaderHandle::open(container.to_str().unwrap()).unwrap();
+    assert!(!reader.has_column_aware_steps());
+    let source_id = (0..reader.path_count())
+        .find(|id| reader.path(*id).unwrap().ends_with("legacy_source.cdc"))
+        .unwrap();
+    assert_eq!(reader.path_table_kind(source_id), Some(PathTableKind::Bare));
+    let count = reader.step_count();
+    assert_eq!(count, 1);
+    let mut paths = vec![0; count as usize];
+    let mut lines = vec![0; count as usize];
+    let mut columns = vec![u64::MAX; count as usize];
+    assert_eq!(
+        reader
+            .step_locations_with_columns(0, count, &mut paths, &mut lines, &mut columns)
+            .unwrap(),
+        count
+    );
+    assert_eq!(paths, vec![source_id]);
+    assert_eq!(lines, vec![3]);
+    assert_eq!(columns, vec![0]); // The public reader's exact absent-column sentinel.
+    let optional: Vec<Option<u64>> = columns
+        .into_iter()
+        .map(|column| (column != 0).then_some(column))
+        .collect();
+    assert_eq!(optional, vec![None]);
 }
