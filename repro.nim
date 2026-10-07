@@ -25,6 +25,7 @@
 
 import repro_project_dsl
 import repro_dsl_stdlib/foreign_env
+import "../codetracer-trace-format-nim/build_writer_artifacts"
 
 package codetracer_flow_recorder:
   defaultToolProvisioning (when defined(windows): tarball else: path)
@@ -34,8 +35,8 @@ package codetracer_flow_recorder:
     # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
     # rustc.nim / rustfmt.nim resolve on Windows. On Linux/macOS the
     # nix flake supplies the same versions.
-    "rustc >=1.85"
-    "cargo >=1.85"
+    "rustc >=1.88"
+    "cargo >=1.88"
     # C compiler driver — rustc links through `cc`, and build scripts
     # (cc-rs, the Nim FFI) compile C. Declaring it puts its directory on
     # every cargo edge's PATH. Windows links with MSVC instead.
@@ -48,6 +49,9 @@ package codetracer_flow_recorder:
     # a static library at cargo build time.
     "nim >=2.2 <3.0"
     "nimble"
+    "git"
+    # build.rs compiles the genuine Cadence helper from go-helper/go.mod.
+    "go >=1.23"
 
     # Cap'n Proto schema compiler used by the recorder's build.rs.
     "capnp"
@@ -67,6 +71,12 @@ package codetracer_flow_recorder:
     # POSIX build, so an unguarded entry would fail to resolve on Linux/macOS.
     when defined(windows):
       "chocolatey"
+
+    # The unchanged CLI verification invokes Bash/dirname/grep and Cargo.
+    "sh"
+    "bash"
+    "dirname"
+    "grep"
 
   executable codetracerFlowRecorder:
     name: "codetracer-flow-recorder"
@@ -94,7 +104,7 @@ package codetracer_flow_recorder:
       actionId = "codetracer-flow-recorder.cargo-build",
       extraInputs = @[
         "Cargo.toml", "Cargo.lock",
-        "src", "build.rs"
+        "src", "build.rs", "go-helper"
       ],
       extraOutputs = @[recorderBinary])
     discard collect("default", @[recorderBuild])
@@ -116,24 +126,47 @@ package codetracer_flow_recorder:
     # §M4 — the whole-binary edge becomes a fan-out point without
     # changing this recipe.
 
+    const nimRoot = "../codetracer-trace-format-nim"
+    let decoderBuild = buildCtPrint(nimRoot)
+    let decoderBinary = ctPrintPath(nimRoot)
+
     let testsBuild = cargo.test(
       locked = true,
       noRun = true,
       actionId = "codetracer-flow-recorder.cargo-test-build",
       extraInputs = @[
         "Cargo.toml", "Cargo.lock",
-        "src", "build.rs", "tests"
+        "src", "build.rs", "go-helper", "tests", "test-programs",
+        "../codetracer-trace-format/codetracer_ctfs"
       ],
       extraOutputs = @["target/debug/deps"])
 
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-flow-recorder.cargo-test-run",
-      after = @[testsBuild.action],
+      after = @[testsBuild.action, decoderBuild],
       extraInputs = @[
         "Cargo.toml", "Cargo.lock",
-        "src", "tests",
-        "target/debug/deps"
+        "src", "tests", "test-programs", "go-helper", "build.rs",
+        "target/debug/deps", decoderBinary,
+        "../codetracer-trace-format/codetracer_ctfs"
       ])
 
-    discard collect("test", @[testsRun.action])
+    # A real full verification interpreter boundary, never an opaque builder.
+    let cliVerify = shell(
+      command = "bash tests/verify-cli-convention-no-silent-skip.sh",
+      actionId = "codetracer-flow-recorder.verify-cli-convention",
+      after = @[testsRun.action],
+      extraInputs = @["tests/verify-cli-convention-no-silent-skip.sh",
+                      "Cargo.toml", "Cargo.lock", "src", "build.rs", "go-helper"],
+      cacheable = false)
+
+    for action in [recorderBuild, testsBuild.action, testsRun.action, cliVerify]:
+      appendRegisteredActionToolIdentityRefs(action.id,
+        ["cargo", "rustc", "nim", "nimble", "git", "go", "capnp", "zstd"])
+      when defined(linux):
+        appendRegisteredActionToolIdentityRefs(action.id, ["gcc", "pkg-config", "openssl"])
+      elif defined(macosx):
+        appendRegisteredActionToolIdentityRefs(action.id, ["clang", "pkg-config", "openssl"])
+    appendRegisteredActionToolIdentityRefs(cliVerify.id, ["sh", "bash", "dirname", "grep"])
+    discard collect("test", @[testsRun.action, cliVerify])
