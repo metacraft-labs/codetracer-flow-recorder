@@ -1803,10 +1803,10 @@ const ERROR_PATHS_NDJSON: &str = include_str!("ndjson/error_paths_test.ndjson");
 ///     `panic("intentional panic for trace coverage")`.
 ///
 /// All three flow through `EventLogKind` events; the pre/post failures
-/// route through `EventLogKind::TraceLogEvent` (-> `ioStderr`) with a
+/// route through `EventLogKind::TraceLogEvent` with a
 /// `CadencePreCondition` / `CadencePostCondition` metadata tag, while
 /// the user `panic` keeps the historical `EventLogKind::Error`
-/// (-> `ioError`) channel.  The `#[ignore]`d sibling test asserts the
+/// channel.  The `#[ignore]`d sibling test asserts the
 /// looser `>=3` count guarantee; this strict test additionally pins
 /// the io_kind / text payload of every emitted event.
 #[test]
@@ -1922,8 +1922,8 @@ fn test_error_paths_test_via_ct_print_full() {
 
     // ----- IO events: pre-condition, post-condition, panic ------------
     // Three distinct entries.  Pre/post failures route through
-    // `EventLogKind::TraceLogEvent` (= `ioStderr`); the explicit panic
-    // keeps `EventLogKind::Error` (= `ioError`).  Order matches the
+    // `EventLogKind::TraceLogEvent`; the explicit panic
+    // keeps `EventLogKind::Error`.  Order matches the
     // emission order in the fixture.
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
@@ -1944,15 +1944,18 @@ fn test_error_paths_test_via_ct_print_full() {
         io_summary,
         vec![
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "pre-condition failed: denominator must be non-zero",
             ),
-            ("ioStderr", "post-condition failed: division must be exact",),
-            ("ioError", "intentional panic for trace coverage"),
+            (
+                "TraceLogEvent",
+                "post-condition failed: division must be exact",
+            ),
+            ("Error", "intentional panic for trace coverage"),
         ],
         "Pre/post-condition failures must route through `TraceLogEvent` \
-         (ioStderr) with a distinct text payload; the user-issued panic \
-         keeps the historical `Error` (ioError) channel."
+         with a distinct text payload; the user-issued panic \
+         keeps the historical `Error` channel."
     );
 }
 
@@ -1982,7 +1985,7 @@ const RESOURCE_CAPABILITY_NDJSON: &str = include_str!("ndjson/resource_capabilit
 /// on the **exact** event shape.  Cadence-specific coverage:
 /// resources (create / move-via-deposit / destroy).  The recorder
 /// surfaces resource lifecycle events through the special-event log
-/// (`EventLogKind::TraceLogEvent` → `ioStderr` in `ct-print --full`).
+/// (`EventLogKind::TraceLogEvent`, as `ct-print --full` names it).
 ///
 /// Resource arguments to functions (e.g. the `coin: @Coin` parameter
 /// on `Vault.deposit`) decode as a typed
@@ -2072,7 +2075,7 @@ fn test_resource_capability_test_via_ct_print_full() {
         ],
     );
 
-    // ----- IO events: 4 ioStderr resource-log entries -----------------
+    // ----- IO events: 4 TraceLogEvent resource-log entries -----------------
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
         io_events.len(),
@@ -2082,8 +2085,8 @@ fn test_resource_capability_test_via_ct_print_full() {
     for io in &io_events {
         assert_eq!(
             io["io_kind"].as_str(),
-            Some("ioStderr"),
-            "resource events route through TraceLogEvent → ioStderr; \
+            Some("TraceLogEvent"),
+            "resource events route through TraceLogEvent; \
              got {io}"
         );
         // Each event payload follows the `owner=<address>` convention.
@@ -2228,7 +2231,7 @@ const CAPABILITIES_NDJSON: &str = include_str!("ndjson/capabilities_test.ndjson"
 /// the dereferenced payload.  Borrowed references (cadence_type `&Vault`)
 /// share the same Reference variant.  The publish / unpublish
 /// transitions surface as `event` NDJSON entries that route through
-/// `EventLogKind::EvmEvent` → `ioStderr` io_events with the path
+/// `EventLogKind::EvmEvent` io_events with the path
 /// captured in `text`.
 #[test]
 fn test_capabilities_test_via_ct_print_full() {
@@ -2351,7 +2354,7 @@ fn test_capabilities_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         io_summary,
-        vec![("ioStderr", "/public/Vault"), ("ioStderr", "/public/Vault"),],
+        vec![("EvmEvent", "/public/Vault"), ("EvmEvent", "/public/Vault"),],
         "capability publish/unpublish payloads"
     );
 
@@ -2698,7 +2701,7 @@ fn test_transactions_test_via_ct_print_full() {
         .collect();
     assert_eq!(phase_payloads, vec!["prepare", "execute", "post"]);
     for io in &io_events {
-        assert_eq!(io["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(io["io_kind"].as_str(), Some("EvmEvent"));
     }
 }
 
@@ -2989,7 +2992,7 @@ fn test_address_literals_test_via_ct_print_full() {
 //                                    Successful evaluations are silent;
 //                                    failures surface with
 //                                    `CadencePreCondition` / `CadencePostCondition`
-//                                    metadata routing through ioStderr.
+//                                    metadata routing through TraceLogEvent.
 //   * `events_emit_test`            — `event Foo(...)` declarations + `emit`.
 //                                    Each emit surfaces as a tagged
 //                                    `CadenceEmit:` io_event with all
@@ -3132,7 +3135,7 @@ fn test_resources_full_test_via_ct_print_full() {
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
 
     // Filter to just the owner-change events (the resource lifecycle
-    // create/destroy events also route through TraceLogEvent → ioStderr,
+    // create/destroy events also route through TraceLogEvent,
     // so we look for the literal `ResourceOwnerChange:` tag in `text`).
     let owner_changes: Vec<&str> = io_events
         .iter()
@@ -3153,13 +3156,13 @@ fn test_resources_full_test_via_ct_print_full() {
          shift, force-unwrap)"
     );
 
-    // Every owner-change event routes through TraceLogEvent → ioStderr.
+    // Every owner-change event routes through TraceLogEvent.
     for ev in io_events.iter().filter(|e| {
         e["text"]
             .as_str()
             .is_some_and(|t| t.starts_with("ResourceOwnerChange:"))
     }) {
-        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(ev["io_kind"].as_str(), Some("TraceLogEvent"));
     }
 
     // ----- Returns: compute=0, main=0 --------------------------------
@@ -3317,7 +3320,7 @@ const PRE_POST_NDJSON: &str = include_str!("ndjson/pre_post_conditions_test.ndjs
 /// Successful evaluations are silent (no io_event for the
 /// pre/post check itself).  Failed pre-conditions surface with the
 /// `CadencePreCondition` tag (routed through
-/// `EventLogKind::TraceLogEvent` → `ioStderr`); failed
+/// `EventLogKind::TraceLogEvent`); failed
 /// post-conditions surface with `CadencePostCondition` (same
 /// channel, distinct text payload).  This tag-channel split — and
 /// the user-issued `panic` keeping the historical `Error` channel
@@ -3415,15 +3418,21 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
         io_summary,
         vec![
             // 1. Account create (lifecycle).
-            ("ioStderr", "owner=alice"),
+            ("TraceLogEvent", "owner=alice"),
             // 2. First failing call: pre-condition.
-            ("ioStderr", "pre-condition failed: amount must be positive"),
+            (
+                "TraceLogEvent",
+                "pre-condition failed: amount must be positive"
+            ),
             // 3. Second failing call: post-condition.
-            ("ioStderr", "post-condition failed: balance must increase"),
+            (
+                "TraceLogEvent",
+                "post-condition failed: balance must increase"
+            ),
             // 4. Account destroy (lifecycle).
-            ("ioStderr", "owner=alice"),
+            ("TraceLogEvent", "owner=alice"),
         ],
-        "Pre/post failures route through TraceLogEvent → ioStderr \
+        "Pre/post failures route through TraceLogEvent \
          with distinct text payloads.  The PASSING first call \
          (deposit(amount: 25) → returns 125) produces NO io_event — \
          the silence is what proves the pre/post tag dispatch is not \
@@ -3516,11 +3525,11 @@ fn test_events_emit_test_via_ct_print_full() {
         io_summary,
         vec![
             (
-                "ioStderr",
+                "EvmEvent",
                 "CadenceEmit:Transfer(amount: 12.5, from: 0x01, to: 0x02)",
             ),
             (
-                "ioStderr",
+                "EvmEvent",
                 "CadenceEmit:NFTMinted(id: 1001, metadata: {\"name\": \"Cat\", \"rarity\": \"common\"})",
             ),
         ],
@@ -4200,18 +4209,21 @@ fn test_access_control_test_via_ct_print_full() {
     assert_eq!(
         access_tags,
         vec![
-            ("ioStderr", "CadenceAccess:main:AccessAll"),
-            ("ioStderr", "CadenceAccess:compute:AccessAll"),
-            ("ioStderr", "CadenceAccess:Vault.reveal_self:AccessSelf"),
+            ("TraceLogEvent", "CadenceAccess:main:AccessAll"),
+            ("TraceLogEvent", "CadenceAccess:compute:AccessAll"),
             (
-                "ioStderr",
+                "TraceLogEvent",
+                "CadenceAccess:Vault.reveal_self:AccessSelf"
+            ),
+            (
+                "TraceLogEvent",
                 "CadenceAccess:Vault.reveal_contract:AccessContract",
             ),
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "CadenceAccess:Vault.reveal_account:AccessAccount",
             ),
-            ("ioStderr", "CadenceAccess:Vault.reveal_all:AccessAll"),
+            ("TraceLogEvent", "CadenceAccess:Vault.reveal_all:AccessAll"),
         ],
         "Each call frame must surface its source-declared visibility \
          tag through the CadenceAccess io_event channel — the strict \
@@ -4400,7 +4412,7 @@ fn test_optional_chaining_test_via_ct_print_full() {
             .as_str()
             .is_some_and(|t| t.starts_with("ForceNilUnwrap:"))
     }) {
-        assert_eq!(ev["io_kind"].as_str(), Some("ioStderr"));
+        assert_eq!(ev["io_kind"].as_str(), Some("TraceLogEvent"));
     }
 
     // ----- Returns: compute=7, main=7 --------------------------------
@@ -4485,10 +4497,10 @@ fn test_scripts_test_via_ct_print_full() {
     assert_eq!(
         io_summary,
         vec![
-            ("ioStderr", "CadenceAccess:main:AccessAll"),
-            ("ioStderr", "CadenceScriptEntry:main"),
+            ("TraceLogEvent", "CadenceAccess:main:AccessAll"),
+            ("TraceLogEvent", "CadenceScriptEntry:main"),
             (
-                "ioStderr",
+                "TraceLogEvent",
                 "CadenceAccess:MarketContract.floor_price:AccessAll",
             ),
         ],
@@ -5016,8 +5028,8 @@ fn test_anyresource_anystruct_test_via_ct_print_full() {
     assert_eq!(
         any_type_tags,
         vec![
-            ("ioStderr", "CadenceAnyType:AnyResource:Vault:r"),
-            ("ioStderr", "CadenceAnyType:AnyStruct:Token:s"),
+            ("TraceLogEvent", "CadenceAnyType:AnyResource:Vault:r"),
+            ("TraceLogEvent", "CadenceAnyType:AnyStruct:Token:s"),
         ],
         "Each dynamic-supertype binding surfaces as a tagged \
          CadenceAnyType:<static>:<runtime>:<varname> io_event so both \
@@ -5097,7 +5109,7 @@ const COMPOSITE_TYPES_NDJSON: &str = include_str!("ndjson/composite_types_test.n
 /// (`Structure` / `Resource` / `Event`).  The recorder surfaces each
 /// kind as a tagged io_event (`CompositeKindStructure:<Type>`,
 /// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
-/// through `EventLogKind::TraceLogEvent` → `ioStderr`.  The `event`
+/// through `EventLogKind::TraceLogEvent`.  The `event`
 /// composite additionally surfaces as a tagged `CadenceEmit:` io_event
 /// when emitted (the existing M9 emit path).
 ///
@@ -5185,9 +5197,9 @@ fn test_composite_types_test_via_ct_print_full() {
     assert_eq!(
         composite_kind_tags,
         vec![
-            ("ioStderr", "CompositeKindStructure:C.Coord"),
-            ("ioStderr", "CompositeKindResource:C.Vault"),
-            ("ioStderr", "CompositeKindEvent:C.Spawned"),
+            ("TraceLogEvent", "CompositeKindStructure:C.Coord"),
+            ("TraceLogEvent", "CompositeKindResource:C.Vault"),
+            ("TraceLogEvent", "CompositeKindEvent:C.Spawned"),
         ],
         "Each composite-declaration kind surfaces with its canonical \
          `CompositeKind<Kind>:<Type>` tag, in struct → resource → event \
@@ -5211,7 +5223,7 @@ fn test_composite_types_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         emit_tags,
-        vec![("ioStderr", "CadenceEmit:C.Spawned(id: 1)")],
+        vec![("EvmEvent", "CadenceEmit:C.Spawned(id: 1)")],
         "Event-kind composites surface twice: once for the kind tag \
          (CompositeKindEvent), once for the emit-site tag \
          (CadenceEmit:<Name>(<args>))."
@@ -6081,7 +6093,7 @@ fn test_type_aliases_test_via_ct_print_full() {
         .collect();
     assert_eq!(
         alias_tags,
-        vec![("ioStderr", "CadenceTypeAlias:Coin:UFix64")],
+        vec![("TraceLogEvent", "CadenceTypeAlias:Coin:UFix64")],
         "Type alias surfaces as a tagged CadenceTypeAlias:<Alias>:\
          <Underlying> io_event so downstream consumers can resolve \
          the alias → underlying linkage without re-parsing the source."
@@ -6187,8 +6199,8 @@ fn test_attachments_test_via_ct_print_full() {
     assert_eq!(
         attachment_tags,
         vec![
-            ("ioStderr", "CadenceAttachmentAttach:Logger:Vault"),
-            ("ioStderr", "CadenceAttachmentRemove:Logger:Vault"),
+            ("TraceLogEvent", "CadenceAttachmentAttach:Logger:Vault"),
+            ("TraceLogEvent", "CadenceAttachmentRemove:Logger:Vault"),
         ],
         "Each attach site surfaces with its `CadenceAttachmentAttach:\
          <Att>:<Target>` tag; each remove with the symmetric \
@@ -6349,9 +6361,11 @@ const COLUMNS_NDJSON: &str = include_str!("ndjson/columns_test.ndjson");
 /// thing that tells the two steps on it apart, and the fixture also steps
 /// through `columns_test_onchain.cdc`, which has no file on disk — the shape
 /// a Cadence `import` from an address produces, where the contract's source
-/// lives on chain and the recorder has nothing to read. That file gets no
-/// per-line table, so it has no column axis, and a column folded into its
-/// address would name a later line rather than a column.
+/// lives on chain and the recorder has nothing to read. That file is
+/// registered with no per-line table, so the writer records the conventional
+/// table (100,000 lines of 1024 positions, `internal-files.md` §"`paths.dat`
+/// Layout A"): it still has a column axis, and its step's column reads back
+/// as recorded.
 #[test]
 fn test_columns_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -6376,10 +6390,9 @@ fn test_columns_test_via_ct_print_full() {
     );
 
     // ----- Every step's resolved (file, line, column) -----------------
-    // `column` is absent, not zero, for a file with no column axis: the
-    // reader declines to decode one rather than inventing a value, and
-    // ct-print leaves the key off. `None` here means "the reader refused",
-    // which is the state the format asks for.
+    // Every file of a column-aware trace has a column axis — its own table,
+    // or the conventional one when the recorder had no source to measure —
+    // so every step resolves a column.
     let positions: Vec<(String, i64, Option<i64>)> = doc["events"]
         .as_array()
         .expect("events array")
@@ -6419,11 +6432,11 @@ fn test_columns_test_via_ct_print_full() {
             ("columns_test.cdc".to_string(), 9, Some(17)),
             // `return b`
             ("columns_test.cdc".to_string(), 10, Some(5)),
-            // The on-chain contract: line 3, and NO column. Line 3 is the
-            // assertion that bites — a column of 9 folded into a line-only
-            // address resolves to line 11, a position this program never
-            // executed and one that reads back as entirely plausible.
-            ("columns_test_onchain.cdc".to_string(), 3, None),
+            // The on-chain contract, whose source the recorder cannot read:
+            // line 3 at the column the trace gave, on the conventional table.
+            // A recorder that withheld the column would read back as column
+            // 1, a position the program never stepped to.
+            ("columns_test_onchain.cdc".to_string(), 3, Some(9)),
         ],
     );
 
