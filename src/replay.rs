@@ -50,6 +50,12 @@ pub struct ReplayConfig {
     pub access_node_url: String,
     /// Directory the executed Cadence sources are written to.
     pub source_dir: Option<PathBuf>,
+    /// Replay from the transcript in this directory (the helper's
+    /// `--from-inputs`) instead of reading the access node.
+    pub inputs: Option<PathBuf>,
+    /// Write a transcript of the run's inputs to this directory (the
+    /// helper's `--record-inputs`).
+    pub record_inputs: Option<PathBuf>,
 }
 
 impl ReplayConfig {
@@ -59,6 +65,8 @@ impl ReplayConfig {
             tx_hash: normalise_tx_hash(tx_hash),
             access_node_url: access_node_url.to_string(),
             source_dir: None,
+            inputs: None,
+            record_inputs: None,
         }
     }
 
@@ -142,7 +150,8 @@ fn replay_transaction_with_helper(
     std::fs::create_dir_all(&source_dir)
         .with_context(|| format!("cannot create source dir: {}", source_dir.display()))?;
 
-    let output = Command::new(helper_bin)
+    let mut command = Command::new(helper_bin);
+    command
         .arg("replay")
         .arg("--tx-id")
         .arg(&config.tx_hash)
@@ -151,17 +160,22 @@ fn replay_transaction_with_helper(
         .arg("--source-dir")
         .arg(&source_dir)
         .arg("--verdict-out")
-        .arg(out_dir.join(VERDICT_FILE))
-        .output()
-        .with_context(|| {
-            format!(
-                "failed to run replay helper '{}'. Build it from go-replay-helper/ \
+        .arg(out_dir.join(VERDICT_FILE));
+    if let Some(inputs) = &config.inputs {
+        command.arg("--from-inputs").arg(inputs);
+    }
+    if let Some(record) = &config.record_inputs {
+        command.arg("--record-inputs").arg(record);
+    }
+    let output = command.output().with_context(|| {
+        format!(
+            "failed to run replay helper '{}'. Build it from go-replay-helper/ \
                  and either:\n  \
                  - put it on your $PATH as '{}', or\n  \
                  - point the {} environment variable at the binary",
-                helper_bin, DEFAULT_HELPER_BIN, HELPER_BIN_ENV
-            )
-        })?;
+            helper_bin, DEFAULT_HELPER_BIN, HELPER_BIN_ENV
+        )
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);

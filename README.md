@@ -74,6 +74,32 @@ Cadence's `getBlock(at:)` and the per-block entropy behind `revertibleRandom`.
 `just replay-smoke` replays a mainnet transaction and fails unless it
 reproduced.
 
+`--record-inputs <dir>` writes a transcript of everything the run read (the
+block header, the block's transactions, the chain's result and every
+parent-state register), and `--inputs <dir>` replays from it with no access
+node: the same FVM re-executes the same inputs and produces the same stream.
+A transcript authenticates its bodies -- the header must hash to its block id
+and every transaction to its id -- and a register it does not hold fails the
+run rather than reading as absent.
+
+The helper has two measuring subcommands of its own:
+
+- `cadence-replay-helper probe-floor [--access-node host:port]` bisects the
+  lowest height whose registers the node serves, and records the refusal one
+  block below and the node's own spork root beside it. Measured 2026-10-20:
+  the current mainnet node serves from 137,390,146 (its spork root) and the
+  previous spork's node, `access-001.mainnet27.nodes.onflow.org:9000`, from
+  130,290,659 to 137,390,145. Each is that node's retention, not the chain's
+  floor.
+- `cadence-replay-helper block --height <h>` lists a block's transactions in
+  execution order with their proposer, payer and authorizers, marking the
+  protocol's system transactions.
+
+Replaying a transaction from the previous spork with this FVM (v0.51.1) does
+not reproduce it: measured on five, the events are the same and the fee is
+not, because that spork's blocks were executed by flow-go v0.44, which
+meters computation differently.
+
 #### Convert a recorded trace to JSON
 
 ```bash

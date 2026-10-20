@@ -10,6 +10,7 @@ require (
 	github.com/onflow/cadence v1.10.6
 	github.com/onflow/flow-go v0.51.1
 	github.com/onflow/flow-go-sdk v1.10.8
+	github.com/onflow/flow/protobuf/go/flow v0.4.20
 	github.com/rs/zerolog v1.29.0
 	google.golang.org/grpc v1.83.0
 )
@@ -111,7 +112,6 @@ require (
 	github.com/onflow/flow-ft/lib/go/templates v1.1.1 // indirect
 	github.com/onflow/flow-nft/lib/go/contracts v1.4.1 // indirect
 	github.com/onflow/flow-nft/lib/go/templates v1.4.1 // indirect
-	github.com/onflow/flow/protobuf/go/flow v0.4.20 // indirect
 	github.com/onflow/go-ethereum v1.13.4 // indirect
 	github.com/onflow/nft-storefront/lib/go/contracts v1.1.1-0.20260409183916-cddb825ea066 // indirect
 	github.com/onflow/sdks v0.6.0-preview.1 // indirect

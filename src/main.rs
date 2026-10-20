@@ -118,6 +118,16 @@ struct ReplayArgs {
     #[arg(long)]
     source_dir: Option<PathBuf>,
 
+    /// Replay from a transcript a previous `--record-inputs` run wrote, with
+    /// no access node: the same FVM re-executes the same inputs.
+    #[arg(long)]
+    inputs: Option<PathBuf>,
+
+    /// Write a transcript of this run's inputs (block, transactions, the
+    /// chain's result and every parent-state register read) to this directory.
+    #[arg(long)]
+    record_inputs: Option<PathBuf>,
+
     /// Directory where the trace files will be written.
     ///
     /// Falls back to `CODETRACER_FLOW_RECORDER_OUT_DIR` when omitted.
@@ -233,6 +243,8 @@ fn replay(args: ReplayArgs) -> Result<()> {
     if let Some(source_dir) = args.source_dir {
         config = config.with_source_dir(source_dir);
     }
+    config.inputs = args.inputs;
+    config.record_inputs = args.record_inputs;
 
     eprintln!(
         "Replaying transaction {} via {}",

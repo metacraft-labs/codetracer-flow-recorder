@@ -48,10 +48,7 @@ import (
 	"github.com/onflow/cadence/runtime"
 	"github.com/onflow/cadence/sema"
 	sdk "github.com/onflow/flow-go-sdk"
-	sdkgrpc "github.com/onflow/flow-go-sdk/access/grpc"
 	"github.com/rs/zerolog"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/onflow/flow-go/fvm"
 	reusableRuntime "github.com/onflow/flow-go/fvm/runtime"
@@ -144,9 +141,36 @@ func main() {
 	sourceDir := flag.String("source-dir", "", "directory the executed Cadence sources are written to")
 	verdictOut := flag.String("verdict-out", "", "file the replay verdict JSON is written to")
 	computeLimit := flag.Uint64("compute-limit", flow.DefaultMaxTransactionGasLimit, "compute limit for the debugged transaction")
+	fromInputs := flag.String("from-inputs", "", "replay from the transcript in this directory instead of the access node")
+	recordInputs := flag.String("record-inputs", "", "write a transcript of this run's inputs to this directory")
 	// The first argument may be the literal "replay", so the Rust side can
 	// call either helper the same way.
 	args := os.Args[1:]
+	if len(args) > 0 && args[0] == "probe-floor" {
+		probe := flag.NewFlagSet("probe-floor", flag.ExitOnError)
+		node := probe.String("access-node", defaultAccessNode, "access node gRPC address")
+		chain := probe.String("chain", "flow-mainnet", "chain id")
+		out := probe.String("out", "", "file the probe JSON is written to (default stdout)")
+		_ = probe.Parse(args[1:])
+		if err := runProbeFloor(*node, flow.ChainID(*chain), *out); err != nil {
+			fmt.Fprintf(os.Stderr, "cadence-replay-helper probe-floor: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(args) > 0 && args[0] == "block" {
+		fs := flag.NewFlagSet("block", flag.ExitOnError)
+		node := fs.String("access-node", defaultAccessNode, "access node gRPC address")
+		chain := fs.String("chain", "flow-mainnet", "chain id")
+		height := fs.Uint64("height", 0, "block height")
+		out := fs.String("out", "", "file the listing JSON is written to (default stdout)")
+		_ = fs.Parse(args[1:])
+		if err := runBlock(*node, flow.ChainID(*chain), *height, *out); err != nil {
+			fmt.Fprintf(os.Stderr, "cadence-replay-helper block: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if len(args) > 0 && args[0] == "replay" {
 		args = args[1:]
 	}
@@ -158,14 +182,14 @@ func main() {
 		os.Exit(2)
 	}
 
-	err := run(*txIDFlag, *accessNode, flow.ChainID(*chainFlag), *sourceDir, *verdictOut, *computeLimit)
+	err := run(*txIDFlag, *accessNode, flow.ChainID(*chainFlag), *sourceDir, *verdictOut, *fromInputs, *recordInputs, *computeLimit)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cadence-replay-helper: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(rawTxID, accessNode string, chainID flow.ChainID, sourceDir, verdictOut string, computeLimit uint64) error {
+func run(rawTxID, accessNode string, chainID flow.ChainID, sourceDir, verdictOut, fromInputs, recordInputs string, computeLimit uint64) error {
 	ctx := context.Background()
 	chain := chainID.Chain()
 
@@ -174,46 +198,14 @@ func run(rawTxID, accessNode string, chainID flow.ChainID, sourceDir, verdictOut
 		return fmt.Errorf("bad transaction id %q: %w", rawTxID, err)
 	}
 
-	flowClient, err := sdkgrpc.NewClient(
-		accessNode,
-		sdkgrpc.WithGRPCDialOptions(
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
-			grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(64<<20)),
-		),
-	)
+	acq, err := acquire(ctx, txID, accessNode, chain, fromInputs)
 	if err != nil {
-		return fmt.Errorf("access node client: %w", err)
+		return err
 	}
-	defer flowClient.Close()
-
-	txResult, err := flowClient.GetTransactionResult(ctx, sdk.Identifier(txID))
-	if err != nil {
-		return fmt.Errorf("fetching transaction result: %w", err)
-	}
-	blockID := flow.Identifier(txResult.BlockID)
-
-	header, err := debug.GetAccessAPIBlockHeader(ctx, flowClient.RPCClient(), blockID)
-	if err != nil {
-		return fmt.Errorf("fetching block header: %w", err)
-	}
-	blockTxs, err := flowClient.GetTransactionsByBlockID(ctx, sdk.Identifier(blockID))
-	if err != nil {
-		return fmt.Errorf("fetching block transactions: %w", err)
-	}
-
-	remoteClient, err := debug.NewExecutionDataRemoteClient(accessNode, chain)
-	if err != nil {
-		return fmt.Errorf("execution data client: %w", err)
-	}
-	defer remoteClient.Close()
-
-	// StorageSnapshot(h) reads the registers RESULTING from h-1, i.e. the
-	// state the block at h started from.
-	remoteSnapshot, err := remoteClient.StorageSnapshot(header.Height, header.ID())
-	if err != nil {
-		return fmt.Errorf("storage snapshot at %d: %w", header.Height-1, err)
-	}
-	blockSnapshot := debug.NewCachingStorageSnapshot(remoteSnapshot)
+	defer acq.close()
+	header, blockTxs := acq.header, acq.transactions
+	blockID := header.ID()
+	blockSnapshot := debug.NewCachingStorageSnapshot(acq.prestate)
 
 	logger := zerolog.New(io.Discard)
 
@@ -329,8 +321,13 @@ loop:
 	verdict.Untraced = replayFacts(untraced)
 	verdict.ObservationPerturbed = verdict.Untraced.ComputationUsed != verdict.Replay.ComputationUsed ||
 		strings.Join(verdict.Untraced.EventTypes, ",") != strings.Join(verdict.Replay.EventTypes, ",")
-	verdict.OnChain = onChainFacts(txResult)
-	compareResults(verdict, outcome.result, txResult)
+	verdict.OnChain = onChainFacts(acq.onChain)
+	compareResults(verdict, outcome.result, acq.onChain)
+	if recordInputs != "" {
+		if err := acq.save(recordInputs, txID); err != nil {
+			return fmt.Errorf("recording inputs: %w", err)
+		}
+	}
 
 	if err := tracer.writeEvents(os.Stdout); err != nil {
 		return err
@@ -437,14 +434,12 @@ func replayFacts(result debug.Result) ResultFacts {
 	return facts
 }
 
-func onChainFacts(r *sdk.TransactionResult) ResultFacts {
+func onChainFacts(r OnChainResult) ResultFacts {
 	facts := ResultFacts{
-		Failed:          r.Error != nil,
-		ComputationUsed: r.ComputationUsage,
+		Failed:          r.Failed,
+		ErrorMessage:    r.ErrorMessage,
+		ComputationUsed: r.ComputationUsed,
 		EventTypes:      []string{},
-	}
-	if r.Error != nil {
-		facts.ErrorMessage = r.Error.Error()
 	}
 	for _, ev := range r.Events {
 		facts.EventTypes = append(facts.EventTypes, ev.Type)
@@ -457,7 +452,7 @@ func onChainFacts(r *sdk.TransactionResult) ResultFacts {
 // recorded on both sides but not compared, because the debugger's own work
 // is not metered identically and an exact match is not a property the chain
 // promises across releases.
-func compareResults(v *Verdict, replay debug.Result, onChain *sdk.TransactionResult) {
+func compareResults(v *Verdict, replay debug.Result, onChain OnChainResult) {
 	v.StatusMatched = v.Replay.Failed == v.OnChain.Failed
 	n := len(onChain.Events)
 	if len(replay.Output.Events) > n {
@@ -480,9 +475,9 @@ func compareResults(v *Verdict, replay debug.Result, onChain *sdk.TransactionRes
 			}
 			continue
 		}
-		if string(got.Type) != want.Type || gotValue.String() != want.Value.String() {
+		if string(got.Type) != want.Type || gotValue.String() != want.Value {
 			if v.FirstEventDiff == "" {
-				v.FirstEventDiff = fmt.Sprintf("event %d: on-chain %s %s, replay %s %s", i, want.Type, want.Value.String(), got.Type, gotValue.String())
+				v.FirstEventDiff = fmt.Sprintf("event %d: on-chain %s %s, replay %s %s", i, want.Type, want.Value, got.Type, gotValue.String())
 			}
 			continue
 		}
