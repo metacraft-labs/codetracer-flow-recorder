@@ -18,10 +18,13 @@ package main
 // comparison with the chain's recorded events stands behind.
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -38,6 +41,26 @@ import (
 )
 
 const transcriptSchema = "codetracer-flow-recorder/replay-inputs@1"
+
+// transcriptFile is the name a transcript is written under in its directory.
+const transcriptFile = "inputs.json.gz"
+
+// readTranscript reads a transcript directory's document, gzipped or not.
+func readTranscript(dir string) ([]byte, error) {
+	if raw, err := os.ReadFile(filepath.Join(dir, "inputs.json")); err == nil {
+		return raw, nil
+	}
+	f, err := os.Open(filepath.Join(dir, transcriptFile))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	zr, err := gzip.NewReader(f)
+	if err != nil {
+		return nil, err
+	}
+	return io.ReadAll(zr)
+}
 
 // EventFact is an event as the chain recorded it, in the form the verdict
 // compares: its type and its value's Cadence string.
@@ -186,11 +209,26 @@ func (a *acquired) save(dir string, txID flow.Identifier) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(dir, "inputs.json"), append(data, '\n'), 0o644)
+	// Gzipped: a transcript is mostly contract code, base64-encoded, and a
+	// block's second transaction carries the first's reads as well -- 1.24 MB
+	// as JSON on mainnet, over the 1 MB a committed file may be.
+	var buf bytes.Buffer
+	zw, err := gzip.NewWriterLevel(&buf, gzip.BestCompression)
+	if err != nil {
+		return err
+	}
+	zw.ModTime = time.Time{}
+	if _, err := zw.Write(append(data, '\n')); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, transcriptFile), buf.Bytes(), 0o644)
 }
 
 func loadTranscript(dir string, txID flow.Identifier) (*acquired, error) {
-	data, err := os.ReadFile(filepath.Join(dir, "inputs.json"))
+	data, err := readTranscript(dir)
 	if err != nil {
 		return nil, fmt.Errorf("reading transcript: %w", err)
 	}
