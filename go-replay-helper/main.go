@@ -36,6 +36,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -815,6 +816,10 @@ func (t *statementTracer) onStop(stop interpreter.Stop) {
 		}
 		sort.Strings(names)
 		for _, n := range names {
+			if unevaluated(values[n]) {
+				t.emit(TraceEvent{Type: "variable", Name: n, Value: "<not yet evaluated>"})
+				continue
+			}
 			val := values[n].GetValue(inter)
 			if val == nil {
 				continue
@@ -854,6 +859,23 @@ func (t *statementTracer) syncFrames(inter *interpreter.Interpreter, name string
 }
 
 const maxRenderedLen = 512
+
+// unevaluated reports whether a variable is still lazy: a contract value, for
+// one, is bound to a getter that loads it from storage on first access. Calling
+// GetValue on it would load state the execution itself may never read, and the
+// FVM meters that read below the interpreter, where unmetered cannot reach.
+// Measured on mainnet block 150,000,001: forcing every variable in scope added
+// one unit of computation to a transaction that failed its storage check, so
+// the traced run no longer matched the untraced one. The getter is unexported,
+// so it is read by reflection, and only for nil-ness: it is never called.
+func unevaluated(v interpreter.Variable) bool {
+	sv, ok := v.(*interpreter.SimpleVariable)
+	if !ok {
+		return false
+	}
+	getter := reflect.ValueOf(sv).Elem().FieldByName("getter")
+	return getter.IsValid() && !getter.IsNil()
+}
 
 // unmetered detaches the interpreter's computation and memory gauges until
 // the returned function is called. Reading a value through the interpreter --
