@@ -92,9 +92,11 @@ enum Commands {
 
     /// Replay a Flow on-chain transaction.
     ///
-    /// Fetches the transaction from a Flow Access Node, extracts its
-    /// Cadence script and arguments, replays execution through the
-    /// Go tracer helper, and writes a CTFS bundle to `--out-dir`.
+    /// Re-executes the transaction with the network's FVM against the
+    /// register state its block started from (after the transactions that
+    /// precede it in the block), through `cadence-replay-helper`, and writes
+    /// a CTFS bundle, the executed sources and `replay-verdict.json` to
+    /// `--out-dir`.
     Replay(ReplayArgs),
 
     /// Print version information.
@@ -111,7 +113,8 @@ struct ReplayArgs {
     #[arg(long, default_value = codetracer_flow_recorder::replay::DEFAULT_ACCESS_NODE_URL)]
     access_node: String,
 
-    /// Optional directory containing Cadence source files for source mapping.
+    /// Directory the executed Cadence sources are written to (defaults to
+    /// `<out-dir>/sources`).
     #[arg(long)]
     source_dir: Option<PathBuf>,
 

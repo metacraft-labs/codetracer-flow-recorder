@@ -89,6 +89,27 @@
             unset _flow_real_cargo_home _flow_cargo_home _flow_entry
           '';
         };
+
+        # `replay`'s helper: the network's FVM, pinned to the flow-go release
+        # the network runs (see go-replay-helper/main.go), which needs Go
+        # 1.26. The dev shell's Go is the cadence shell's 1.25, and building
+        # there would make `GOTOOLCHAIN=auto` fetch a toolchain behind Nix's
+        # back, so the helper is a package of its own.
+        packages.cadence-replay-helper = (pkgs.buildGoModule.override { go = pkgs.go_1_26; }) {
+          pname = "cadence-replay-helper";
+          version = "0.1.0";
+          src = ./go-replay-helper;
+          # onflow/crypto compiles blst from C sources that `go mod vendor`
+          # does not copy (`consts.h: No such file or directory`), so the
+          # module cache is used whole instead of a vendor directory.
+          proxyVendor = true;
+          vendorHash = "sha256-GRCucoCX20ujvkfXrCUvTrZcaoaB+R5tUhQ0BzUyqbY=";
+          env.GOTOOLCHAIN = "local";
+          postInstall = ''
+            mv $out/bin/go-replay-helper $out/bin/cadence-replay-helper
+          '';
+          meta.mainProgram = "cadence-replay-helper";
+        };
       }
     );
 }

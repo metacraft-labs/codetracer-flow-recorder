@@ -783,6 +783,9 @@ pub struct CadenceTracer {
     /// logical step.  The values ride along on that index and no real step's
     /// `StepValues` ever reports them.
     step_open: bool,
+    /// Where the open step is, so a resource lifecycle record at the same
+    /// statement attaches to it instead of opening a second step there.
+    open_step_at: Option<(PathBuf, u32)>,
     /// Variables staged while no step was open, held until the next step.
     ///
     /// The Cadence helper emits a binding's value AFTER the `return` of the
@@ -861,6 +864,27 @@ impl CadenceTracer {
     /// Every step the recorder emits goes through here, so the "a variable is
     /// always registered against a step" invariant holds for the resource
     /// lifecycle events as much as for plain `step` records.
+    /// Open the step a resource lifecycle record belongs to: in the record's own
+    /// file, which in a replay is often an imported contract rather than the
+    /// entry source, and only if the open step is not already that statement.
+    /// The replay helper reports a create, move or destroy from inside the
+    /// statement whose step it has already emitted, so opening another step
+    /// there would count one statement twice.
+    fn open_resource_step(
+        &mut self,
+        source_path: &Path,
+        file: &str,
+        line: u32,
+        column: Option<u32>,
+    ) {
+        let resolved = resolve_step_source_path(source_path, file);
+        if self.step_open && self.open_step_at.as_ref() == Some(&(resolved.clone(), line)) {
+            return;
+        }
+        self.ensure_path_with_line_lengths(&resolved);
+        self.open_step(&resolved, line, column);
+    }
+
     fn open_step(&mut self, path: &Path, line: u32, column: Option<u32>) {
         TraceWriter::register_step_with_column(
             &mut *self.writer,
@@ -869,6 +893,7 @@ impl CadenceTracer {
             column.map(|c| Line(c as i64)),
         );
         self.step_open = true;
+        self.open_step_at = Some((path.to_path_buf(), line));
         for (name, value) in std::mem::take(&mut self.deferred_vars) {
             self.write_variable(&name, value);
         }
@@ -906,6 +931,7 @@ impl CadenceTracer {
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
             step_open: false,
+            open_step_at: None,
             deferred_vars: Vec::new(),
         };
 
@@ -999,6 +1025,7 @@ impl CadenceTracer {
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
             step_open: false,
+            open_step_at: None,
             deferred_vars: Vec::new(),
         };
 
@@ -1062,6 +1089,7 @@ impl CadenceTracer {
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
             step_open: false,
+            open_step_at: None,
             deferred_vars: Vec::new(),
         };
 
@@ -1242,7 +1270,7 @@ impl CadenceTracer {
                     resource_type,
                     uuid,
                     owner,
-                    file: _,
+                    file,
                     line,
                     column,
                 } => {
@@ -1252,7 +1280,7 @@ impl CadenceTracer {
                     // events that don't carry a column) we pass
                     // `None` — the column-aware flag still surfaces
                     // on the trace.
-                    self.open_step(source_path, *line, *column);
+                    self.open_resource_step(source_path, file, *line, *column);
 
                     // Synthesise the implicit `<Type>.init` Cadence
                     // initializer in the function table so the function
@@ -1300,13 +1328,13 @@ impl CadenceTracer {
                     uuid,
                     from_owner,
                     to_owner,
-                    file: _,
+                    file,
                     line,
                     column,
                 } => {
                     // FU-Column-Aware-Nav-Flow: column-aware step at
                     // the move site.  See `ResourceCreate` above.
-                    self.open_step(source_path, *line, *column);
+                    self.open_resource_step(source_path, file, *line, *column);
 
                     // Emit the resource as a variable showing the ownership transfer.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);
@@ -1330,13 +1358,13 @@ impl CadenceTracer {
                     resource_type,
                     uuid,
                     owner,
-                    file: _,
+                    file,
                     line,
                     column,
                 } => {
                     // FU-Column-Aware-Nav-Flow: column-aware step at
                     // the destroy site.  See `ResourceCreate` above.
-                    self.open_step(source_path, *line, *column);
+                    self.open_resource_step(source_path, file, *line, *column);
 
                     // Emit the resource as a variable showing destruction.
                     let var_name = format!("@resource:{}#{}", resource_type, uuid);

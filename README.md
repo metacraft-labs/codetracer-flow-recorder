@@ -48,12 +48,31 @@ lifecycle events, and writes a CTFS bundle to `--out-dir`.
 #### Replay a Flow on-chain transaction
 
 ```bash
-codetracer-flow-recorder replay --tx-hash <tx-hash> --out-dir <dir>
+just build-replay-helper   # once: target/replay-helper/bin/cadence-replay-helper
+CADENCE_REPLAY_HELPER_BIN=target/replay-helper/bin/cadence-replay-helper \
+  codetracer-flow-recorder replay --tx-hash <tx-id> --out-dir <dir>
 ```
 
-Fetches the transaction from a Flow Access Node, extracts its Cadence
-script and arguments, replays execution through the Go tracer helper,
-and writes a CTFS bundle to `--out-dir`.
+Re-executes the transaction with the network's own FVM (flow-go pinned to
+the release mainnet runs, in `go-replay-helper/`) against the register
+state an access node serves for the parent of its block, after re-executing
+the transactions that precede it in the block, with Cadence's statement
+debugger attached. `--out-dir` receives:
+
+- the CTFS container, named after the transaction's Cadence location;
+- `sources/`, every Cadence location the execution entered, read from the
+  same register state -- so the contract source is the code that ran, not
+  the account's current code;
+- `replay-verdict.json`: the block, index and prestate height, the proposer,
+  payer and authorizers, and whether the replay **reproduced** the chain's
+  result (status and every event, with values), plus an untraced control run
+  so that observing the execution is shown not to have changed it.
+
+The public mainnet access node serves register state from the current
+spork's root block (137,390,146) to the sealed tip. Not reproduced yet:
+Cadence's `getBlock(at:)` and the per-block entropy behind `revertibleRandom`.
+`just replay-smoke` replays a mainnet transaction and fails unless it
+reproduced.
 
 #### Convert a recorded trace to JSON
 

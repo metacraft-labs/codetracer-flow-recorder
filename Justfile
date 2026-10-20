@@ -30,6 +30,20 @@ lint:
 format:
   cargo fmt
 
+# Build `cadence-replay-helper`, the FVM-backed helper `replay` drives, into
+# target/replay-helper/bin. It is a flake package because it needs Go 1.26
+# (see flake.nix).
+build-replay-helper:
+  nix build .#cadence-replay-helper -o target/replay-helper
+
+# Replay a Flow mainnet transaction end to end against the public access node
+# and fail unless the replay reproduced the chain's result. Needs network.
+replay-smoke tx="c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611": build build-replay-helper
+  rm -rf target/replay-smoke
+  CADENCE_REPLAY_HELPER_BIN=target/replay-helper/bin/cadence-replay-helper \
+    target/debug/codetracer-flow-recorder replay --tx-hash {{tx}} -o target/replay-smoke
+  jq -e '.reproduced and (.observationPerturbed | not)' target/replay-smoke/replay-verdict.json
+
 fmt: format
 # --- M13: Packaging UX Standardization ---
 # These recipes implement Repo-Requirements.md §2.5. The OS-packaged

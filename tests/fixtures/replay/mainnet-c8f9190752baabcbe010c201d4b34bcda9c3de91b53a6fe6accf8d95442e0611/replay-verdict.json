@@ -1,0 +1,115 @@
+{
+  "schema": "codetracer-flow-recorder/replay-verdict@1",
+  "transactionId": "c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611",
+  "blockId": "95f879a91abd8047feeda2f2a7fba532d919f57a84298bcc293d526eee621ca7",
+  "blockHeight": 168391034,
+  "indexInBlock": 0,
+  "precedingReplayed": 0,
+  "prestateHeight": 168391033,
+  "prestateStrategy": "replay-preceding",
+  "flowGoVersion": "v0.51.1",
+  "proposer": "0xe1593ba4ef5f4b10",
+  "payer": "0x18eb4ee6b3c026d2",
+  "authorizers": [
+    "0xe1593ba4ef5f4b10",
+    "0xead892083b3e2c6c"
+  ],
+  "onChain": {
+    "failed": false,
+    "computationUsed": 374,
+    "eventTypes": [
+      "A.b8ea91944fd51c43.OffersV2.OfferAvailable",
+      "A.1654653399040a61.FlowToken.TokensWithdrawn",
+      "A.f233dcee88fe0abe.FungibleToken.Withdrawn",
+      "A.1654653399040a61.FlowToken.TokensDeposited",
+      "A.f233dcee88fe0abe.FungibleToken.Deposited",
+      "A.f919ee77447b7497.FlowFees.FeesDeducted"
+    ]
+  },
+  "replay": {
+    "failed": false,
+    "computationUsed": 374,
+    "eventTypes": [
+      "A.b8ea91944fd51c43.OffersV2.OfferAvailable",
+      "A.1654653399040a61.FlowToken.TokensWithdrawn",
+      "A.f233dcee88fe0abe.FungibleToken.Withdrawn",
+      "A.1654653399040a61.FlowToken.TokensDeposited",
+      "A.f233dcee88fe0abe.FungibleToken.Deposited",
+      "A.f919ee77447b7497.FlowFees.FeesDeducted"
+    ]
+  },
+  "untraced": {
+    "failed": false,
+    "computationUsed": 374,
+    "eventTypes": [
+      "A.b8ea91944fd51c43.OffersV2.OfferAvailable",
+      "A.1654653399040a61.FlowToken.TokensWithdrawn",
+      "A.f233dcee88fe0abe.FungibleToken.Withdrawn",
+      "A.1654653399040a61.FlowToken.TokensDeposited",
+      "A.f233dcee88fe0abe.FungibleToken.Deposited",
+      "A.f919ee77447b7497.FlowFees.FeesDeducted"
+    ]
+  },
+  "observationPerturbed": false,
+  "eventsMatched": 6,
+  "eventsCompared": 6,
+  "statusMatched": true,
+  "reproduced": true,
+  "steps": 160,
+  "sources": [
+    {
+      "location": "A.0b2a3299cc857e29.TopShot",
+      "file": "A.0b2a3299cc857e29.TopShot.cdc",
+      "sha256": "f2ee610d47e07302855b16b5d4aebaf4fe1460c8a363fd294cfa097dbd322948",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.1654653399040a61.FlowToken",
+      "file": "A.1654653399040a61.FlowToken.cdc",
+      "sha256": "9c06599843ef7496216edcb16675ab866bba68196bd16f8dc8941bb9b9025ec0",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.1d7e57aa55817448.MetadataViews",
+      "file": "A.1d7e57aa55817448.MetadataViews.cdc",
+      "sha256": "9032f46909e729d26722cbfcee87265e4f81cd2912e936669c0e6b510d007e81",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.b8ea91944fd51c43.DapperOffersV2",
+      "file": "A.b8ea91944fd51c43.DapperOffersV2.cdc",
+      "sha256": "a37a6cd76e88628fc2905ac9548d4c2566fa7b948b9b1f64d9d57b6eda82d67b",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.b8ea91944fd51c43.OffersV2",
+      "file": "A.b8ea91944fd51c43.OffersV2.cdc",
+      "sha256": "387548895f5f4266b64fc57d2574c81333778b8b7cb9649551b4cebf1e0e4762",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.e467b9dd11fa00df.FlowStorageFees",
+      "file": "A.e467b9dd11fa00df.FlowStorageFees.cdc",
+      "sha256": "08bf1e6ecf59e05d871511bfa9ef01fcc1646ca1e2fba2b475eea336ef9b0613",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.f233dcee88fe0abe.FungibleToken",
+      "file": "A.f233dcee88fe0abe.FungibleToken.cdc",
+      "sha256": "3649a38e0b46ab56bffcd0ecedfa54918cf9284290e31ec3c294eed72245657c",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "A.f919ee77447b7497.FlowFees",
+      "file": "A.f919ee77447b7497.FlowFees.cdc",
+      "sha256": "8c05b672119d7f4eead1adfefda1cb4c65e118e3cad81facaee84408805a2fa6",
+      "origin": "contract-register@prestate"
+    },
+    {
+      "location": "t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3",
+      "file": "t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc",
+      "sha256": "ba89a1a79f674eb4f39bdc9f5ba7ae5b7e2d071b0f36995aa8f606e73892a5ad",
+      "origin": "transaction-script"
+    }
+  ]
+}
