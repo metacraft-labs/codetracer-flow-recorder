@@ -56,6 +56,45 @@ pub struct ReplayConfig {
     /// Write a transcript of the run's inputs to this directory (the
     /// helper's `--record-inputs`).
     pub record_inputs: Option<PathBuf>,
+    /// The container's recording id: minted by the writer when `None`.
+    pub recording_id: Option<RecordingId>,
+}
+
+/// How a replay's container recording id is chosen when it is not minted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordingId {
+    /// Use this UUIDv7 verbatim; the writer validates it.
+    Pinned(String),
+    /// Derive it from the block timestamp and the transaction id
+    /// ([`derived_recording_id`]), so two replays of one transaction write
+    /// the same container.
+    Derive,
+}
+
+/// A valid UUIDv7 (RFC 9562) that is a function of the transaction alone: the
+/// 48-bit time field is the block's timestamp in milliseconds, so ids still
+/// sort by when the transaction ran, and the 74 "random" bits are the leading
+/// bits of the transaction id. The same layout as `codetracer-evm-recorder`'s
+/// `derived_recording_id`, from a millisecond timestamp because Flow's
+/// header states one.
+pub fn derived_recording_id(block_timestamp_ms: u64, tx_id: &[u8; 32]) -> String {
+    let ms = block_timestamp_ms & 0xFFFF_FFFF_FFFF;
+    let h = tx_id;
+    let mut b = [0u8; 16];
+    b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
+    b[6] = 0x70 | (h[0] & 0x0f);
+    b[7] = h[1];
+    b[8] = 0x80 | (h[2] & 0x3f);
+    b[9..].copy_from_slice(&h[3..10]);
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 impl ReplayConfig {
@@ -67,6 +106,7 @@ impl ReplayConfig {
             source_dir: None,
             inputs: None,
             record_inputs: None,
+            recording_id: None,
         }
     }
 
@@ -198,7 +238,40 @@ fn replay_transaction_with_helper(
     );
 
     let source_path = entry_source_path(&events, &source_dir, &config.tx_hash);
-    CadenceTracer::trace_program_from_events(&source_path, &events, out_dir)
+    let recording_id = match &config.recording_id {
+        None => None,
+        Some(RecordingId::Pinned(id)) => Some(id.clone()),
+        Some(RecordingId::Derive) => Some(derive_from_verdict(&out_dir.join(VERDICT_FILE))?),
+    };
+    CadenceTracer::trace_program_from_events_with_recording_id(
+        &source_path,
+        &events,
+        out_dir,
+        recording_id.as_deref(),
+    )
+}
+
+/// The derived recording id of the replay whose verdict is at `path`.
+fn derive_from_verdict(path: &Path) -> Result<String> {
+    let verdict: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
+    )?;
+    let ms = verdict["blockTimestampMs"]
+        .as_u64()
+        .filter(|ms| *ms > 0)
+        .ok_or_else(|| eyre!("{} states no blockTimestampMs", path.display()))?;
+    let id = verdict["transactionId"]
+        .as_str()
+        .ok_or_else(|| eyre!("{} states no transactionId", path.display()))?;
+    let mut bytes = [0u8; 32];
+    if id.len() != 64 {
+        return Err(eyre!("transaction id {id} is not 32 bytes of hex"));
+    }
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&id[2 * i..2 * i + 2], 16)
+            .map_err(|e| eyre!("transaction id {id}: {e}"))?;
+    }
+    Ok(derived_recording_id(ms, &bytes))
 }
 
 /// The entry source of a replayed transaction: the transaction script, which
@@ -466,6 +539,44 @@ mod tests {
             entry_source_path(&[], &sources, "abcd"),
             sources.join("t.abcd.cdc"),
             "with no step, the entry falls back to the transaction location's name"
+        );
+    }
+}
+
+#[cfg(test)]
+mod recording_id_tests {
+    use super::derived_recording_id;
+
+    /// The derived id is a well-formed UUIDv7 whose time field is the block's
+    /// millisecond timestamp, and it depends on the transaction: the control
+    /// is a second transaction in the same block, which must get another id.
+    #[test]
+    fn derived_ids_are_uuidv7_of_the_block_time_and_the_transaction() {
+        // Mainnet block 168,391,034 and the two user transactions in it.
+        let ms = 1_760_964_548_123_u64;
+        let mut a = [0u8; 32];
+        a[..4].copy_from_slice(&[0xc8, 0xf9, 0x19, 0x07]);
+        let mut b = a;
+        b[3] = 0x08;
+
+        let id = derived_recording_id(ms, &a);
+        assert_eq!(id, derived_recording_id(ms, &a), "a function of its inputs");
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert!(parts[2].starts_with('7'), "version 7: {id}");
+        assert!(
+            matches!(parts[3].chars().next(), Some('8' | '9' | 'a' | 'b')),
+            "RFC 9562 variant: {id}"
+        );
+        let time = u64::from_str_radix(&format!("{}{}", parts[0], parts[1]), 16).unwrap();
+        assert_eq!(time, ms, "the time field is the block's timestamp");
+        assert_ne!(
+            id,
+            derived_recording_id(ms, &b),
+            "control: another transaction"
         );
     }
 }

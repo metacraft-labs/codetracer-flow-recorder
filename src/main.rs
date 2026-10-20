@@ -128,6 +128,12 @@ struct ReplayArgs {
     #[arg(long)]
     record_inputs: Option<PathBuf>,
 
+    /// The container's recording id: a UUIDv7 to use verbatim, or `derive` to
+    /// compute one from the block timestamp and the transaction id, so that
+    /// two replays of one transaction write the same bytes. Minted when omitted.
+    #[arg(long)]
+    recording_id: Option<String>,
+
     /// Directory where the trace files will be written.
     ///
     /// Falls back to `CODETRACER_FLOW_RECORDER_OUT_DIR` when omitted.
@@ -245,6 +251,10 @@ fn replay(args: ReplayArgs) -> Result<()> {
     }
     config.inputs = args.inputs;
     config.record_inputs = args.record_inputs;
+    config.recording_id = args.recording_id.map(|v| match v.as_str() {
+        "derive" => codetracer_flow_recorder::replay::RecordingId::Derive,
+        _ => codetracer_flow_recorder::replay::RecordingId::Pinned(v),
+    });
 
     eprintln!(
         "Replaying transaction {} via {}",

@@ -87,10 +87,13 @@ type TraceArg struct {
 // Verdict is the --verdict-out document: what ran, against what, and whether
 // the replay reproduced what the chain recorded.
 type Verdict struct {
-	Schema            string      `json:"schema"`
-	TransactionID     string      `json:"transactionId"`
-	BlockID           string      `json:"blockId"`
-	BlockHeight       uint64      `json:"blockHeight"`
+	Schema        string `json:"schema"`
+	TransactionID string `json:"transactionId"`
+	BlockID       string `json:"blockId"`
+	BlockHeight   uint64 `json:"blockHeight"`
+	// BlockTimestampMs is the block's proposal time in Unix milliseconds, as its
+	// header states it: the input a derived recording id is computed from.
+	BlockTimestampMs  uint64      `json:"blockTimestampMs"`
 	IndexInBlock      int         `json:"indexInBlock"`
 	PrecedingReplayed int         `json:"precedingReplayed"`
 	PrestateHeight    uint64      `json:"prestateHeight"`
@@ -214,6 +217,7 @@ func run(rawTxID, accessNode string, chainID flow.ChainID, sourceDir, verdictOut
 		TransactionID:    txID.String(),
 		BlockID:          blockID.String(),
 		BlockHeight:      header.Height,
+		BlockTimestampMs: header.Timestamp,
 		IndexInBlock:     -1,
 		PrestateHeight:   header.Height - 1,
 		PrestateStrategy: "replay-preceding",

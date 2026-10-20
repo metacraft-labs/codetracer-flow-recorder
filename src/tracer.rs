@@ -19,7 +19,7 @@ use codetracer_trace_types::{
 use codetracer_trace_writer_nim::non_streaming_trace_writer::NonStreamingTraceWriter;
 use codetracer_trace_writer_nim::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{
-    create_trace_writer, StreamingValueEncoder, TraceEventsFileFormat,
+    create_trace_writer, NimTraceWriter, StreamingValueEncoder, TraceEventsFileFormat,
 };
 use eyre::{eyre, Context, Result};
 use serde::Deserialize;
@@ -1011,6 +1011,18 @@ impl CadenceTracer {
         events: &[TraceEvent],
         out_dir: &Path,
     ) -> Result<()> {
+        Self::trace_program_from_events_with_recording_id(source_path, events, out_dir, None)
+    }
+
+    /// [`Self::trace_program_from_events`], with the container's recording id
+    /// pinned rather than minted, so two conversions of one stream write the
+    /// same bytes. `None` lets the writer mint a fresh UUIDv7.
+    pub fn trace_program_from_events_with_recording_id(
+        source_path: &Path,
+        events: &[TraceEvent],
+        out_dir: &Path,
+        recording_id: Option<&str>,
+    ) -> Result<()> {
         // CTFS-only.  Pre-2026-05-08 this helper accepted a format
         // parameter; the convention now mandates CTFS exclusively.
         let format = TraceEventsFileFormat::Ctfs;
@@ -1019,8 +1031,17 @@ impl CadenceTracer {
 
         // Create the trace writer.
         let program_str = source_path.to_string_lossy();
+        let writer: Box<dyn TraceWriter + Send> = match recording_id {
+            None => create_trace_writer(&program_str, &[], format),
+            Some(id) => {
+                let mut nim = NimTraceWriter::new(&program_str, &[], format);
+                nim.set_recording_id(id)
+                    .map_err(|e| eyre!("recording id {id}: {e}"))?;
+                Box::new(nim)
+            }
+        };
         let mut tracer = CadenceTracer {
-            writer: create_trace_writer(&program_str, &[], format),
+            writer,
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
