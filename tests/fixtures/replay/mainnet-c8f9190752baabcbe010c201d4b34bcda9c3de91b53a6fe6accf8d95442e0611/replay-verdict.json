@@ -3,6 +3,7 @@
   "transactionId": "c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611",
   "blockId": "95f879a91abd8047feeda2f2a7fba532d919f57a84298bcc293d526eee621ca7",
   "blockHeight": 168391034,
+  "blockTimestampMs": 1792496703484,
   "indexInBlock": 0,
   "precedingReplayed": 0,
   "prestateHeight": 168391033,
@@ -106,8 +107,8 @@
       "origin": "contract-register@prestate"
     },
     {
-      "location": "t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3",
-      "file": "t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc",
+      "location": "t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611",
+      "file": "t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc",
       "sha256": "ba89a1a79f674eb4f39bdc9f5ba7ae5b7e2d071b0f36995aa8f606e73892a5ad",
       "origin": "transaction-script"
     }

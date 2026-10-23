@@ -251,6 +251,13 @@ func run(rawTxID, accessNode string, chainID flow.ChainID, sourceDir, verdictOut
 	if target == nil {
 		return fmt.Errorf("transaction %s is not among the %d transactions of block %s", txID, len(blockTxs), blockID)
 	}
+	body, err := transactionBody(target)
+	if err != nil {
+		return fmt.Errorf("rebuilding the body of %s: %w", txID, err)
+	}
+	if body.ID() != txID {
+		return fmt.Errorf("the rebuilt body of %s hashes to %s; the replay would run, and name its script, as another transaction", txID, body.ID())
+	}
 
 	verdict.Proposer = target.ProposalKey.Address.HexWithPrefix()
 	verdict.Payer = target.Payer.HexWithPrefix()
@@ -372,9 +379,16 @@ func newBlockRunner(chain flow.Chain, logger zerolog.Logger, header *flow.Header
 	return &blockRunner{vm: fvm.NewVirtualMachine(), ctx: fvm.NewContext(chain, opts...)}
 }
 
-func (r *blockRunner) run(tx *sdk.Transaction, index int, snapshot debug.StorageSnapshot) (debug.Result, error) {
+// transactionBody rebuilds the body the chain executed, signatures and
+// reference block included. Neither is needed to execute it (authorization
+// checks are off), but both are hashed into the transaction's id, and the id is
+// the Cadence location of the transaction's own script: without them the trace
+// names the script `t.<some other id>`, and so do the chain's own error
+// positions when the replay restates them.
+func transactionBody(tx *sdk.Transaction) (*flow.TransactionBody, error) {
 	builder := flow.NewTransactionBodyBuilder().
 		SetScript(tx.Script).
+		SetReferenceBlockID(flow.Identifier(tx.ReferenceBlockID)).
 		SetComputeLimit(tx.GasLimit).
 		SetPayer(flow.Address(tx.Payer)).
 		SetProposalKey(
@@ -388,7 +402,17 @@ func (r *blockRunner) run(tx *sdk.Transaction, index int, snapshot debug.Storage
 	for _, authorizer := range tx.Authorizers {
 		builder.AddAuthorizer(flow.Address(authorizer))
 	}
-	body, err := builder.Build()
+	for _, s := range tx.PayloadSignatures {
+		builder.AddPayloadSignatureWithExtensionData(flow.Address(s.Address), s.KeyIndex, s.Signature, s.ExtensionData)
+	}
+	for _, s := range tx.EnvelopeSignatures {
+		builder.AddEnvelopeSignatureWithExtensionData(flow.Address(s.Address), s.KeyIndex, s.Signature, s.ExtensionData)
+	}
+	return builder.Build()
+}
+
+func (r *blockRunner) run(tx *sdk.Transaction, index int, snapshot debug.StorageSnapshot) (debug.Result, error) {
+	body, err := transactionBody(tx)
 	if err != nil {
 		return debug.Result{}, err
 	}

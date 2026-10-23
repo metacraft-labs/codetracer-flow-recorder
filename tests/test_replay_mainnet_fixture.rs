@@ -83,6 +83,32 @@ fn the_fixture_is_a_reproduced_unperturbed_replay() {
     assert!(v["eventsCompared"].as_u64().unwrap() > 0);
 }
 
+/// Cadence locates a transaction's own script at `t.<transaction id>`, and
+/// the chain's error messages point there. The helper rebuilds the body it
+/// executes, and a body rebuilt without its signatures and reference block
+/// hashes to another id, so the script was published under a name the chain
+/// never used. Control: the fixture holds exactly one transaction-script
+/// file, so the check is about its name and not about whether one exists.
+#[test]
+fn the_transaction_script_is_located_at_the_chains_transaction_id() {
+    let v = verdict();
+    let id = v["transactionId"].as_str().unwrap();
+    let scripts: Vec<&str> = v["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["location"].as_str().unwrap())
+        .filter(|l| l.starts_with("t."))
+        .collect();
+    assert_eq!(scripts, vec![format!("t.{id}")]);
+    let files: Vec<String> = std::fs::read_dir(fixture().join("sources"))
+        .unwrap()
+        .map(|f| f.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|n| n.starts_with("t."))
+        .collect();
+    assert_eq!(files, vec![format!("t.{id}.cdc")]);
+}
+
 /// Flow's authorization is a trio. Here the payer is a third account, so a
 /// producer that reports one sender is wrong about who paid.
 #[test]

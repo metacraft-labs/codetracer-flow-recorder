@@ -136,9 +136,9 @@
 {"type":"return"}
 {"type":"return"}
 {"type":"call","name":"prepare"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":18,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":18,"column":9}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"call","name":"TopShot.resolveContractView"}
 {"type":"step","file":"A.0b2a3299cc857e29.TopShot.cdc","line":1759,"column":9}
@@ -199,67 +199,67 @@
 {"type":"variable","name":"self","value":"A.0b2a3299cc857e29.TopShot(7 fields)","cadence_type":"A.0b2a3299cc857e29.TopShot"}
 {"type":"variable","name":"viewType","value":"Type<A.1d7e57aa55817448.MetadataViews.NFTCollectionData>()","cadence_type":"Type"}
 {"type":"return"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":20,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":20,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":29,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":29,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":30,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":30,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":39,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":39,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":48,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":48,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":56,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":56,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":59,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":59,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":60,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":60,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":61,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":61,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":69,"column":13}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":69,"column":13}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":72,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":72,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"call","name":"DapperOffersV2.DapperOffer.addProxyCapability"}
 {"type":"step","file":"A.b8ea91944fd51c43.DapperOffersV2.cdc","line":116,"column":17}
@@ -271,61 +271,61 @@
 {"type":"variable","name":"cap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>"}
 {"type":"variable","name":"self","value":"@resource:A.b8ea91944fd51c43.DapperOffersV2.DapperOffer#500907770","cadence_type":"A.b8ea91944fd51c43.DapperOffersV2.DapperOffer"}
 {"type":"return"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":77,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":77,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":78,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":78,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
 {"type":"variable","name":"ducWithdrawCapPath","value":"/storage/DUCWithdrawCapabilityForOffers","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":79,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":79,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
 {"type":"variable","name":"ducWithdrawCap","value":"Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw) &{A.f233dcee88fe0abe.FungibleToken.Vault}>(address: 0xead892083b3e2c6c, id: 483134)","cadence_type":"(Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw)&{A.f233dcee88fe0abe.FungibleToken.Vault}>)?"}
 {"type":"variable","name":"ducWithdrawCapPath","value":"/storage/DUCWithdrawCapabilityForOffers","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":87,"column":13}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":87,"column":13}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
 {"type":"variable","name":"ducWithdrawCap","value":"Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw) &{A.f233dcee88fe0abe.FungibleToken.Vault}>(address: 0xead892083b3e2c6c, id: 483134)","cadence_type":"(Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw)&{A.f233dcee88fe0abe.FungibleToken.Vault}>)?"}
 {"type":"variable","name":"ducWithdrawCapPath","value":"/storage/DUCWithdrawCapabilityForOffers","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":90,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":90,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
 {"type":"variable","name":"ducWithdrawCap","value":"Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw) &{A.f233dcee88fe0abe.FungibleToken.Vault}>(address: 0xead892083b3e2c6c, id: 483134)","cadence_type":"(Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw)&{A.f233dcee88fe0abe.FungibleToken.Vault}>)?"}
 {"type":"variable","name":"ducWithdrawCapPath","value":"/storage/DUCWithdrawCapabilityForOffers","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":99,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":99,"column":9}
 {"type":"variable","name":"collectionData","value":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData(5 fields)","cadence_type":"A.1d7e57aa55817448.MetadataViews.NFTCollectionData"}
 {"type":"variable","name":"dapper","value":"&Account(0xead892083b3e2c6c)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"variable","name":"dapperOfferProxyManagerCap","value":"Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager) &A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>(address: 0xe1593ba4ef5f4b10, id: 15045)","cadence_type":"(Capability<auth(A.b8ea91944fd51c43.DapperOffersV2.ProxyManager)&A.b8ea91944fd51c43.DapperOffersV2.DapperOffer>)?"}
 {"type":"variable","name":"dapperOfferProxyManagerCapPath","value":"/storage/DapperOfferProxyManagerCapability","cadence_type":"StoragePath"}
 {"type":"variable","name":"ducWithdrawCap","value":"Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw) &{A.f233dcee88fe0abe.FungibleToken.Vault}>(address: 0xead892083b3e2c6c, id: 483134)","cadence_type":"(Capability<auth(A.f233dcee88fe0abe.FungibleToken.Withdraw)&{A.f233dcee88fe0abe.FungibleToken.Vault}>)?"}
 {"type":"variable","name":"ducWithdrawCapPath","value":"/storage/DUCWithdrawCapabilityForOffers","cadence_type":"StoragePath"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"variable","name":"signer","value":"&Account(0xe1593ba4ef5f4b10)","cadence_type":"auth(Capabilities,Storage)&Account"}
 {"type":"return"}
 {"type":"return"}
 {"type":"call","name":"main"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":103,"column":10}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":103,"column":10}
 {"type":"variable","name":"Account","value":"<function>","cadence_type":"fun(auth(BorrowValue|Storage)&Account):auth(Capabilities,Contracts,Inbox,Keys,Storage)&Account"}
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
@@ -333,7 +333,7 @@
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
 {"type":"variable","name":"DapperOffersV2","value":"&A.b8ea91944fd51c43.DapperOffersV2(2 fields)","cadence_type":"&A.b8ea91944fd51c43.DapperOffersV2"}
-{"type":"variable","name":"DapperUtilityCoin","value":"&A.ead892083b3e2c6c.DapperUtilityCoin(1 fields)","cadence_type":"&A.ead892083b3e2c6c.DapperUtilityCoin"}
+{"type":"variable","name":"DapperUtilityCoin","value":"<not yet evaluated>"}
 {"type":"variable","name":"DictionaryType","value":"<function>","cadence_type":"view fun(Type,Type):(Type)?"}
 {"type":"variable","name":"Fix128","value":"<function>","cadence_type":"view fun(Number):Fix128"}
 {"type":"variable","name":"Fix64","value":"<function>","cadence_type":"view fun(Number):Fix64"}
@@ -349,15 +349,15 @@
 {"type":"variable","name":"Int64","value":"<function>","cadence_type":"view fun(Number):Int64"}
 {"type":"variable","name":"Int8","value":"<function>","cadence_type":"view fun(Number):Int8"}
 {"type":"variable","name":"IntersectionType","value":"<function>","cadence_type":"view fun([String]):(Type)?"}
-{"type":"variable","name":"MetadataViews","value":"&A.1d7e57aa55817448.MetadataViews(0 fields)","cadence_type":"&A.1d7e57aa55817448.MetadataViews"}
-{"type":"variable","name":"OffersV2","value":"&A.b8ea91944fd51c43.OffersV2(0 fields)","cadence_type":"&A.b8ea91944fd51c43.OffersV2"}
+{"type":"variable","name":"MetadataViews","value":"<not yet evaluated>"}
+{"type":"variable","name":"OffersV2","value":"<not yet evaluated>"}
 {"type":"variable","name":"OptionalType","value":"<function>","cadence_type":"view fun(Type):Type"}
 {"type":"variable","name":"PrivatePath","value":"<function>","cadence_type":"view fun(String):(PrivatePath)?"}
 {"type":"variable","name":"PublicKey","value":"<function>","cadence_type":"view fun([UInt8],SignatureAlgorithm):PublicKey"}
 {"type":"variable","name":"PublicPath","value":"<function>","cadence_type":"view fun(String):(PublicPath)?"}
 {"type":"variable","name":"RLP","value":"RLP()","cadence_type":"RLP"}
 {"type":"variable","name":"ReferenceType","value":"<function>","cadence_type":"view fun([String],Type):(Type)?"}
-{"type":"variable","name":"Resolver","value":"&A.b8ea91944fd51c43.Resolver(0 fields)","cadence_type":"&A.b8ea91944fd51c43.Resolver"}
+{"type":"variable","name":"Resolver","value":"<not yet evaluated>"}
 {"type":"variable","name":"SignatureAlgorithm","value":"<function>","cadence_type":"view fun(UInt8):(SignatureAlgorithm)?"}
 {"type":"variable","name":"StoragePath","value":"<function>","cadence_type":"view fun(String):(StoragePath)?"}
 {"type":"variable","name":"String","value":"<function>","cadence_type":"view fun():String"}
@@ -392,8 +392,8 @@
 {"type":"variable","name":"randomSourceHistory","value":"<function>","cadence_type":"fun():[UInt8]"}
 {"type":"variable","name":"revertibleRandom","value":"<function>","cadence_type":"fun<T:FixedSizeUnsignedInteger>(T):T"}
 {"type":"variable","name":"royalties","value":"{1 entries}","cadence_type":"{Address:UFix64}"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":104,"column":10}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":104,"column":10}
 {"type":"variable","name":"Account","value":"<function>","cadence_type":"fun(auth(BorrowValue|Storage)&Account):auth(Capabilities,Contracts,Inbox,Keys,Storage)&Account"}
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
@@ -401,7 +401,7 @@
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
 {"type":"variable","name":"DapperOffersV2","value":"&A.b8ea91944fd51c43.DapperOffersV2(2 fields)","cadence_type":"&A.b8ea91944fd51c43.DapperOffersV2"}
-{"type":"variable","name":"DapperUtilityCoin","value":"&A.ead892083b3e2c6c.DapperUtilityCoin(1 fields)","cadence_type":"&A.ead892083b3e2c6c.DapperUtilityCoin"}
+{"type":"variable","name":"DapperUtilityCoin","value":"<not yet evaluated>"}
 {"type":"variable","name":"DictionaryType","value":"<function>","cadence_type":"view fun(Type,Type):(Type)?"}
 {"type":"variable","name":"Fix128","value":"<function>","cadence_type":"view fun(Number):Fix128"}
 {"type":"variable","name":"Fix64","value":"<function>","cadence_type":"view fun(Number):Fix64"}
@@ -417,15 +417,15 @@
 {"type":"variable","name":"Int64","value":"<function>","cadence_type":"view fun(Number):Int64"}
 {"type":"variable","name":"Int8","value":"<function>","cadence_type":"view fun(Number):Int8"}
 {"type":"variable","name":"IntersectionType","value":"<function>","cadence_type":"view fun([String]):(Type)?"}
-{"type":"variable","name":"MetadataViews","value":"&A.1d7e57aa55817448.MetadataViews(0 fields)","cadence_type":"&A.1d7e57aa55817448.MetadataViews"}
-{"type":"variable","name":"OffersV2","value":"&A.b8ea91944fd51c43.OffersV2(0 fields)","cadence_type":"&A.b8ea91944fd51c43.OffersV2"}
+{"type":"variable","name":"MetadataViews","value":"<not yet evaluated>"}
+{"type":"variable","name":"OffersV2","value":"<not yet evaluated>"}
 {"type":"variable","name":"OptionalType","value":"<function>","cadence_type":"view fun(Type):Type"}
 {"type":"variable","name":"PrivatePath","value":"<function>","cadence_type":"view fun(String):(PrivatePath)?"}
 {"type":"variable","name":"PublicKey","value":"<function>","cadence_type":"view fun([UInt8],SignatureAlgorithm):PublicKey"}
 {"type":"variable","name":"PublicPath","value":"<function>","cadence_type":"view fun(String):(PublicPath)?"}
 {"type":"variable","name":"RLP","value":"RLP()","cadence_type":"RLP"}
 {"type":"variable","name":"ReferenceType","value":"<function>","cadence_type":"view fun([String],Type):(Type)?"}
-{"type":"variable","name":"Resolver","value":"&A.b8ea91944fd51c43.Resolver(0 fields)","cadence_type":"&A.b8ea91944fd51c43.Resolver"}
+{"type":"variable","name":"Resolver","value":"<not yet evaluated>"}
 {"type":"variable","name":"SignatureAlgorithm","value":"<function>","cadence_type":"view fun(UInt8):(SignatureAlgorithm)?"}
 {"type":"variable","name":"StoragePath","value":"<function>","cadence_type":"view fun(String):(StoragePath)?"}
 {"type":"variable","name":"String","value":"<function>","cadence_type":"view fun():String"}
@@ -460,17 +460,17 @@
 {"type":"variable","name":"randomSourceHistory","value":"<function>","cadence_type":"fun():[UInt8]"}
 {"type":"variable","name":"revertibleRandom","value":"<function>","cadence_type":"fun<T:FixedSizeUnsignedInteger>(T):T"}
 {"type":"variable","name":"royalties","value":"{1 entries}","cadence_type":"{Address:UFix64}"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"call","name":"execute"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":108,"column":9}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":109,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":108,"column":9}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":109,"column":9}
 {"type":"variable","name":"royaltysList","value":"[0 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":110,"column":13}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":110,"column":13}
 {"type":"variable","name":"key","value":"0xfaf0cc52c6e3acaf","cadence_type":"Address"}
 {"type":"variable","name":"royaltysList","value":"[0 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"call","name":"OffersV2.Royalty.init"}
 {"type":"step","file":"A.b8ea91944fd51c43.OffersV2.cdc","line":71,"column":13}
 {"type":"variable","name":"amount","value":"11.50000000","cadence_type":"UFix64"}
@@ -481,27 +481,27 @@
 {"type":"variable","name":"receiver","value":"Capability<&{A.f233dcee88fe0abe.FungibleToken.Receiver}>(address: 0xfaf0cc52c6e3acaf, id: 4)","cadence_type":"Capability<&{A.f233dcee88fe0abe.FungibleToken.Receiver}>"}
 {"type":"variable","name":"self","value":"A.b8ea91944fd51c43.OffersV2.Royalty(1 fields)","cadence_type":"A.b8ea91944fd51c43.OffersV2.Royalty"}
 {"type":"return"}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":116,"column":9}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":116,"column":9}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":118,"column":9}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":118,"column":9}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":121,"column":16}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":121,"column":16}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":122,"column":13}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":122,"column":13}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":125,"column":17}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":125,"column":17}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":127,"column":13}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":127,"column":13}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
-{"type":"step","file":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.cdc","line":137,"column":9}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
+{"type":"step","file":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.cdc","line":137,"column":9}
 {"type":"variable","name":"royaltysList","value":"[1 elements]","cadence_type":"[A.b8ea91944fd51c43.OffersV2.Royalty]"}
-{"type":"variable","name":"self","value":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3.()","cadence_type":"t.c0ed1d86b9ed9015669051625c61289e31eb398842c202e0144025e0643b8ef3."}
+{"type":"variable","name":"self","value":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611.()","cadence_type":"t.c8f9190752baabcbe010c201d4b34bcda9c3de91b53a6fe6accf8d95442e0611."}
 {"type":"call","name":"DapperOffersV2.DapperOffer.createOffer"}
 {"type":"step","file":"A.b8ea91944fd51c43.DapperOffersV2.cdc","line":150,"column":13}
 {"type":"variable","name":"amount","value":"230.00000000","cadence_type":"UFix64"}
@@ -1036,7 +1036,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1101,7 +1101,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1167,7 +1167,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1259,7 +1259,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1328,7 +1328,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1395,7 +1395,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1462,7 +1462,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1556,7 +1556,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1621,7 +1621,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1687,7 +1687,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1754,7 +1754,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1822,7 +1822,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1891,7 +1891,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -1961,7 +1961,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -2032,7 +2032,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -2136,7 +2136,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
@@ -2208,7 +2208,7 @@
 {"type":"variable","name":"Address","value":"<function>","cadence_type":"view fun(Integer):Address"}
 {"type":"variable","name":"BLS","value":"BLS()","cadence_type":"BLS"}
 {"type":"variable","name":"Burned","value":"<function>","cadence_type":"view fun(String,UFix64,UInt64):A.f233dcee88fe0abe.FungibleToken.Burned"}
-{"type":"variable","name":"Burner","value":"&A.f233dcee88fe0abe.Burner(0 fields)","cadence_type":"&A.f233dcee88fe0abe.Burner"}
+{"type":"variable","name":"Burner","value":"<not yet evaluated>"}
 {"type":"variable","name":"CapabilityType","value":"<function>","cadence_type":"view fun(Type):(Type)?"}
 {"type":"variable","name":"CompositeType","value":"<function>","cadence_type":"view fun(String):(Type)?"}
 {"type":"variable","name":"ConstantSizedArrayType","value":"<function>","cadence_type":"view fun(Type,Int):Type"}
