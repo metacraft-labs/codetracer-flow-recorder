@@ -73,10 +73,13 @@ package codetracer_flow_recorder:
       "chocolatey"
 
     # The unchanged CLI verification invokes Bash/dirname/grep and Cargo.
-    "sh"
-    "bash"
-    "dirname"
-    "grep"
+    # POSIX-only: the Windows CI runner's path-mode tool-provisioning has
+    # no coreutils on PATH, so this gate stays Linux/macOS-only for now.
+    when not defined(windows):
+      "sh"
+      "bash"
+      "dirname"
+      "grep"
 
   executable codetracerFlowRecorder:
     name: "codetracer-flow-recorder"
@@ -126,9 +129,13 @@ package codetracer_flow_recorder:
     # §M4 — the whole-binary edge becomes a fan-out point without
     # changing this recipe.
 
-    const nimRoot = "../codetracer-trace-format-nim"
-    let decoderBuild = buildCtPrint(nimRoot)
-    let decoderBinary = ctPrintPath(nimRoot)
+    # The decoder (ctPrint) and the bash CLI-convention verification are
+    # POSIX-only per the `uses:` guard above — Windows's path-mode tool
+    # provisioning has no coreutils/bash on PATH to resolve them with.
+    when not defined(windows):
+      const nimRoot = "../codetracer-trace-format-nim"
+      let decoderBuild = buildCtPrint(nimRoot)
+      let decoderBinary = ctPrintPath(nimRoot)
 
     let testsBuild = cargo.test(
       locked = true,
@@ -144,29 +151,38 @@ package codetracer_flow_recorder:
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-flow-recorder.cargo-test-run",
-      after = @[testsBuild.action, decoderBuild],
-      extraInputs = @[
-        "Cargo.toml", "Cargo.lock",
-        "src", "tests", "test-programs", "go-helper", "build.rs",
-        "target/debug/deps", decoderBinary,
-        "../codetracer-trace-format/codetracer_ctfs"
-      ])
+      after = (when not defined(windows): @[testsBuild.action, decoderBuild]
+               else: @[testsBuild.action]),
+      extraInputs = (when not defined(windows):
+        @["Cargo.toml", "Cargo.lock",
+          "src", "tests", "test-programs", "go-helper", "build.rs",
+          "target/debug/deps", decoderBinary,
+          "../codetracer-trace-format/codetracer_ctfs"]
+        else:
+        @["Cargo.toml", "Cargo.lock",
+          "src", "tests", "test-programs", "go-helper", "build.rs",
+          "target/debug/deps",
+          "../codetracer-trace-format/codetracer_ctfs"]))
 
-    # A real full verification interpreter boundary, never an opaque builder.
-    let cliVerify = shell(
-      command = "bash tests/verify-cli-convention-no-silent-skip.sh",
-      actionId = "codetracer-flow-recorder.verify-cli-convention",
-      after = @[testsRun.action],
-      extraInputs = @["tests/verify-cli-convention-no-silent-skip.sh",
-                      "Cargo.toml", "Cargo.lock", "src", "build.rs", "go-helper"],
-      cacheable = false)
+    var testActions = @[recorderBuild, testsBuild.action, testsRun.action]
 
-    for action in [recorderBuild, testsBuild.action, testsRun.action, cliVerify]:
+    when not defined(windows):
+      # A real full verification interpreter boundary, never an opaque builder.
+      let cliVerify = shell(
+        command = "bash tests/verify-cli-convention-no-silent-skip.sh",
+        actionId = "codetracer-flow-recorder.verify-cli-convention",
+        after = @[testsRun.action],
+        extraInputs = @["tests/verify-cli-convention-no-silent-skip.sh",
+                        "Cargo.toml", "Cargo.lock", "src", "build.rs", "go-helper"],
+        cacheable = false)
+      testActions.add(cliVerify)
+      appendRegisteredActionToolIdentityRefs(cliVerify.id, ["sh", "bash", "dirname", "grep"])
+
+    for action in testActions:
       appendRegisteredActionToolIdentityRefs(action.id,
         ["cargo", "rustc", "nim", "nimble", "git", "go", "capnp", "zstd"])
       when defined(linux):
         appendRegisteredActionToolIdentityRefs(action.id, ["gcc", "pkg-config", "openssl"])
       elif defined(macosx):
         appendRegisteredActionToolIdentityRefs(action.id, ["clang", "pkg-config", "openssl"])
-    appendRegisteredActionToolIdentityRefs(cliVerify.id, ["sh", "bash", "dirname", "grep"])
-    discard collect("test", @[testsRun.action, cliVerify])
+    discard collect("test", testActions)
