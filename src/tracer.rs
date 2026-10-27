@@ -156,7 +156,7 @@ pub enum TraceEvent {
     // ----- M10 events -----
     /// Tagged owner-change notification emitted alongside a move
     /// operator that transfers ownership of a resource.  Surfaces in
-    /// the multi-stream trace as a `TraceLogEvent` with
+    /// the multi-stream trace as a `TraceLogEvent` (preserved by ct-print) with
     /// the literal `ResourceOwnerChange:` prefix in the text payload
     /// so the tag survives the writer's metadata-drop on the
     /// multi-stream path.  This is the closing piece of the M10
@@ -213,7 +213,7 @@ pub enum TraceEvent {
     /// declaration's type metadata.  The recorder routes each as a
     /// tagged io_event (`CompositeKindStructure:<Type>`,
     /// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
-    /// through `EventLogKind::TraceLogEvent` so the
+    /// through `EventLogKind::TraceLogEvent` (preserved by ct-print) so the
     /// kind is visible to the strict pin without re-deriving it
     /// from the declaration source.
     ///
@@ -237,7 +237,7 @@ pub enum TraceEvent {
     /// `AnyPublicAccount`); the runtime preserves the concrete type
     /// information.  The recorder routes a tagged io_event
     /// (`CadenceAnyType:<static>:<runtime>:<varname>`) through
-    /// `EventLogKind::TraceLogEvent` so both the static
+    /// `EventLogKind::TraceLogEvent` (preserved by ct-print) so both the static
     /// supertype and the concrete runtime type are visible to the
     /// strict pin without re-deriving them from the call frame's
     /// argument types.
@@ -772,6 +772,12 @@ pub struct CadenceTracer {
     /// (line, column)).  Mirrors the EVM recorder's
     /// `paths_with_line_lengths` set.
     paths_with_line_lengths: HashSet<PathBuf>,
+    /// Paths whose writer accepted a column-aware table registration.
+    /// Non-empty Lines tables and empty Conventional tables both establish
+    /// a column axis under the current compact-zero table contract. Keep
+    /// supplied columns for either accepted registration; a failed one
+    /// retains the existing absent-column handling.
+    paths_with_column_axis: HashSet<PathBuf>,
     /// Whether the writer currently holds an open step for variables to
     /// attach to.
     ///
@@ -829,33 +835,51 @@ impl CadenceTracer {
     /// Reads the source file from disk to compute the line lengths.
     /// Soft-fails (logged to stderr) if the file can't be read or
     /// the FFI rejects the call — the trace remains usable, but
-    /// columns on that file fall back to `None` at read time.
+    /// successful empty registration uses the current format's Conventional
+    /// table, whose 100000 lines each have 1024 column positions.
     /// Mirrors the EVM recorder's `ensure_path_with_line_lengths`.
     fn ensure_path_with_line_lengths(&mut self, path: &Path) {
         if self.paths_with_line_lengths.contains(path) {
             return;
         }
         // Try to read the source from disk.  When the file isn't
-        // available (an on-chain contract, or a synthetic NDJSON fixture
-        // whose paths don't exist on the filesystem), register with an
-        // empty line-lengths slice: the writer records the conventional
-        // table (100,000 lines of 1024 positions), so the file still has a
-        // column axis and a step's column reads back as recorded.
+        // available (e.g. tests using synthetic NDJSON whose paths
+        // don't exist on the filesystem), register with an empty
+        // line-lengths slice so the path still gets the
+        // column-aware-compatible `paths.dat` record — the writer
+        // records an empty slice as the Conventional 100000-by-1024
+        // table (internal-files.md, paths.dat Layout A). Successful
+        // registration therefore gives this file a real column axis.
         let line_lengths = match std::fs::read_to_string(path) {
             Ok(src) => compute_line_lengths(&src),
             Err(_) => Vec::new(),
         };
-        if let Err(err) =
-            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths)
-        {
+        let registration =
+            TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
+        if line_lengths.is_empty() && registration.is_ok() {
+            self.paths_with_column_axis.insert(path.to_path_buf());
+        }
+        if let Err(err) = registration {
             eprintln!(
                 "[codetracer-flow-recorder] register_path_with_line_lengths failed for {}: {} \
-                 (column resolution will fall back to None for this file)",
+                 (explicit column registration failed for this file)",
                 path.display(),
                 err,
             );
         }
         self.paths_with_line_lengths.insert(path.to_path_buf());
+    }
+
+    /// The column to record for a step on `path`, or `None` when that file has
+    /// no confirmed column axis to place one on. Successful registration
+    /// confirms either the source table or the current Conventional table;
+    /// failure handling remains unchanged.
+    fn addressable_column(&self, path: &Path, column: Option<u32>) -> Option<Line> {
+        if self.paths_with_column_axis.contains(path) {
+            column.map(|c| Line(c as i64))
+        } else {
+            None
+        }
     }
 
     /// Emit a step at `(path, line, column)` and attach to it every variable
@@ -886,11 +910,12 @@ impl CadenceTracer {
     }
 
     fn open_step(&mut self, path: &Path, line: u32, column: Option<u32>) {
+        let addressable = self.addressable_column(path, column);
         TraceWriter::register_step_with_column(
             &mut *self.writer,
             path,
             Line(line as i64),
-            column.map(|c| Line(c as i64)),
+            addressable,
         );
         self.step_open = true;
         self.open_step_at = Some((path.to_path_buf(), line));
@@ -930,6 +955,7 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
             step_open: false,
             open_step_at: None,
             deferred_vars: Vec::new(),
@@ -1045,6 +1071,7 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
             step_open: false,
             open_step_at: None,
             deferred_vars: Vec::new(),
@@ -1109,6 +1136,7 @@ impl CadenceTracer {
             type_ids: HashMap::new(),
             streaming_encoder: StreamingValueEncoder::new(),
             paths_with_line_lengths: HashSet::new(),
+            paths_with_column_axis: HashSet::new(),
             step_open: false,
             open_step_at: None,
             deferred_vars: Vec::new(),
@@ -1167,9 +1195,9 @@ impl CadenceTracer {
                     // `ast.Position.Column`), so it goes to `open_step`
                     // unchanged.  When the helper omits the column
                     // (legacy NDJSON without column info) the step is
-                    // line-only — `enable_column_aware_steps` remains set, so
-                    // the trace's column-aware flag survives and individual
-                    // steps with `None` fall back cleanly at read time.
+                    // emitted at the start of its line. The trace remains
+                    // column-aware, so its table resolves that position to
+                    // column 1; line-only format modes remain distinct.
                     self.open_step(&resolved, *line, *column);
                 }
                 TraceEvent::Variable {
@@ -1257,12 +1285,11 @@ impl CadenceTracer {
                     // Distinguish Cadence pre-condition / post-condition
                     // violations from a user-issued `panic`.  Pre/post
                     // failures route through `EventLogKind::TraceLogEvent`
-                    // with a dedicated `CadencePreCondition` /
+                    // (preserved by the canonical decoder) with a dedicated `CadencePreCondition` /
                     // `CadencePostCondition` metadata tag, so consumers
                     // can grep them apart from a generic runtime error;
                     // the metadata also pins the failure mode in the
-                    // event log itself, surviving the lossy `io_kind`
-                    // bucketing.
+                    // event log itself alongside the preserved canonical `io_kind`.
                     let (log_kind, metadata) = match error_kind.as_deref() {
                         Some("pre") => (EventLogKind::TraceLogEvent, "CadencePreCondition"),
                         Some("post") => (EventLogKind::TraceLogEvent, "CadencePostCondition"),

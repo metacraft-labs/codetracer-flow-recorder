@@ -1803,10 +1803,10 @@ const ERROR_PATHS_NDJSON: &str = include_str!("ndjson/error_paths_test.ndjson");
 ///     `panic("intentional panic for trace coverage")`.
 ///
 /// All three flow through `EventLogKind` events; the pre/post failures
-/// route through `EventLogKind::TraceLogEvent` with a
+/// route through `EventLogKind::TraceLogEvent` (preserved by ct-print) with a
 /// `CadencePreCondition` / `CadencePostCondition` metadata tag, while
 /// the user `panic` keeps the historical `EventLogKind::Error`
-/// channel.  The `#[ignore]`d sibling test asserts the
+/// (preserved as Error) channel.  The `#[ignore]`d sibling test asserts the
 /// looser `>=3` count guarantee; this strict test additionally pins
 /// the io_kind / text payload of every emitted event.
 #[test]
@@ -1922,8 +1922,8 @@ fn test_error_paths_test_via_ct_print_full() {
 
     // ----- IO events: pre-condition, post-condition, panic ------------
     // Three distinct entries.  Pre/post failures route through
-    // `EventLogKind::TraceLogEvent`; the explicit panic
-    // keeps `EventLogKind::Error`.  Order matches the
+    // `EventLogKind::TraceLogEvent` (preserved by ct-print); the explicit panic
+    // keeps `EventLogKind::Error` (preserved by ct-print).  Order matches the
     // emission order in the fixture.
     let io_events: Vec<&serde_json::Value> = events.iter().filter(|e| e["kind"] == "io").collect();
     assert_eq!(
@@ -1954,8 +1954,8 @@ fn test_error_paths_test_via_ct_print_full() {
             ("Error", "intentional panic for trace coverage"),
         ],
         "Pre/post-condition failures must route through `TraceLogEvent` \
-         with a distinct text payload; the user-issued panic \
-         keeps the historical `Error` channel."
+         (TraceLogEvent) with a distinct text payload; the user-issued panic \
+         keeps the historical `Error` (Error) channel."
     );
 }
 
@@ -1985,7 +1985,7 @@ const RESOURCE_CAPABILITY_NDJSON: &str = include_str!("ndjson/resource_capabilit
 /// on the **exact** event shape.  Cadence-specific coverage:
 /// resources (create / move-via-deposit / destroy).  The recorder
 /// surfaces resource lifecycle events through the special-event log
-/// (`EventLogKind::TraceLogEvent`, as `ct-print --full` names it).
+/// (`EventLogKind::TraceLogEvent`, preserved by `ct-print --full`).
 ///
 /// Resource arguments to functions (e.g. the `coin: @Coin` parameter
 /// on `Vault.deposit`) decode as a typed
@@ -2231,7 +2231,7 @@ const CAPABILITIES_NDJSON: &str = include_str!("ndjson/capabilities_test.ndjson"
 /// the dereferenced payload.  Borrowed references (cadence_type `&Vault`)
 /// share the same Reference variant.  The publish / unpublish
 /// transitions surface as `event` NDJSON entries that route through
-/// `EventLogKind::EvmEvent` io_events with the path
+/// `EventLogKind::EvmEvent` (preserved by ct-print) io_events with the path
 /// captured in `text`.
 #[test]
 fn test_capabilities_test_via_ct_print_full() {
@@ -2992,7 +2992,7 @@ fn test_address_literals_test_via_ct_print_full() {
 //                                    Successful evaluations are silent;
 //                                    failures surface with
 //                                    `CadencePreCondition` / `CadencePostCondition`
-//                                    metadata routing through TraceLogEvent.
+//                                    canonical EvmEvent metadata.
 //   * `events_emit_test`            — `event Foo(...)` declarations + `emit`.
 //                                    Each emit surfaces as a tagged
 //                                    `CadenceEmit:` io_event with all
@@ -3320,7 +3320,7 @@ const PRE_POST_NDJSON: &str = include_str!("ndjson/pre_post_conditions_test.ndjs
 /// Successful evaluations are silent (no io_event for the
 /// pre/post check itself).  Failed pre-conditions surface with the
 /// `CadencePreCondition` tag (routed through
-/// `EventLogKind::TraceLogEvent`); failed
+/// `EventLogKind::TraceLogEvent`, preserved by ct-print); failed
 /// post-conditions surface with `CadencePostCondition` (same
 /// channel, distinct text payload).  This tag-channel split — and
 /// the user-issued `panic` keeping the historical `Error` channel
@@ -5109,7 +5109,7 @@ const COMPOSITE_TYPES_NDJSON: &str = include_str!("ndjson/composite_types_test.n
 /// (`Structure` / `Resource` / `Event`).  The recorder surfaces each
 /// kind as a tagged io_event (`CompositeKindStructure:<Type>`,
 /// `CompositeKindResource:<Type>`, `CompositeKindEvent:<Type>`)
-/// through `EventLogKind::TraceLogEvent`.  The `event`
+/// through `EventLogKind::TraceLogEvent` (preserved by ct-print).  The `event`
 /// composite additionally surfaces as a tagged `CadenceEmit:` io_event
 /// when emitted (the existing M9 emit path).
 ///
@@ -6361,11 +6361,9 @@ const COLUMNS_NDJSON: &str = include_str!("ndjson/columns_test.ndjson");
 /// thing that tells the two steps on it apart, and the fixture also steps
 /// through `columns_test_onchain.cdc`, which has no file on disk — the shape
 /// a Cadence `import` from an address produces, where the contract's source
-/// lives on chain and the recorder has nothing to read. That file is
-/// registered with no per-line table, so the writer records the conventional
-/// table (100,000 lines of 1024 positions, `internal-files.md` §"`paths.dat`
-/// Layout A"): it still has a column axis, and its step's column reads back
-/// as recorded.
+/// lives on chain and the recorder has nothing to read. Current Layout A
+/// assigns that successfully registered file the Conventional table:
+/// 100000 lines of 1024 positions. Its supplied column must survive.
 #[test]
 fn test_columns_test_via_ct_print_full() {
     let Some((doc, source_path)) = record_and_dump_full(
@@ -6390,9 +6388,10 @@ fn test_columns_test_via_ct_print_full() {
     );
 
     // ----- Every step's resolved (file, line, column) -----------------
-    // Every file of a column-aware trace has a column axis — its own table,
-    // or the conventional one when the recorder had no source to measure —
-    // so every step resolves a column.
+    // The missing-source path has a current-format Conventional column
+    // axis. Its supplied line 3, column 9 has file-relative position
+    // (3 - 1) * 1024 + (9 - 1) = 2056. Line-only/Bare modes are distinct
+    // and retain their absent-column semantics.
     let positions: Vec<(String, i64, Option<i64>)> = doc["events"]
         .as_array()
         .expect("events array")
@@ -6432,10 +6431,9 @@ fn test_columns_test_via_ct_print_full() {
             ("columns_test.cdc".to_string(), 9, Some(17)),
             // `return b`
             ("columns_test.cdc".to_string(), 10, Some(5)),
-            // The on-chain contract, whose source the recorder cannot read:
-            // line 3 at the column the trace gave, on the conventional table.
-            // A recorder that withheld the column would read back as column
-            // 1, a position the program never stepped to.
+            // The on-chain contract has a Conventional table despite its
+            // missing source; preserve the actual helper column 9. The
+            // independent 2056-position calculation above pins the result.
             ("columns_test_onchain.cdc".to_string(), 3, Some(9)),
         ],
     );
@@ -6475,4 +6473,156 @@ fn test_columns_test_via_ct_print_full() {
             "<toplevel>".to_string()
         ]
     );
+}
+
+/// Real recorder/container proof of the current Conventional table contract.
+/// No mocks: actual Cadence NDJSON is recorded, raw paths.dat bytes are read
+/// from the shipping CTFS container, and raw step addresses are checked using
+/// independently derived table sizes rather than decoded column values.
+#[test]
+fn test_missing_source_conventional_table_bytes_and_position() {
+    use codetracer_ctfs::CtfsReader;
+    use codetracer_trace_writer_nim::{NimTraceReaderHandle, PathTableKind};
+
+    let temporary = tempfile::tempdir().expect("owned recording scratch");
+    let output = temporary.path().join("traces");
+    let program = test_programs_dir().join("columns_test.cdc");
+    run_tracer_from_ndjson(COLUMNS_NDJSON, &program, &output);
+    let container = assert_valid_ct_file(&output);
+    let reader = NimTraceReaderHandle::open(container.to_str().expect("container path"))
+        .expect("open genuine recorder container");
+    assert!(reader.has_column_aware_steps());
+    let path_id = (0..reader.path_count())
+        .find(|id| {
+            reader
+                .path(*id)
+                .expect("registered path")
+                .ends_with("columns_test_onchain.cdc")
+        })
+        .expect("missing-source path was registered");
+    assert_eq!(
+        reader.path_table_kind(path_id),
+        Some(PathTableKind::Conventional)
+    );
+    assert_eq!(reader.line_count_raw(path_id), 100000);
+    assert_eq!(reader.line_length_raw(path_id, 2), Some(1024));
+
+    let mut archive = CtfsReader::open(&container).expect("read genuine CTFS bytes");
+    let paths = archive.read_file("paths.dat").expect("paths.dat bytes");
+    let offsets = archive.read_file("paths.off").expect("paths.off bytes");
+    assert_eq!(offsets.len() % 8, 0);
+    let offsets: Vec<usize> = offsets
+        .chunks_exact(8)
+        .map(|chunk| u64::from_le_bytes(chunk.try_into().unwrap()) as usize)
+        .collect();
+    let path = reader
+        .path(path_id)
+        .expect("registered missing-source path");
+    let mut length = path.len() as u64;
+    let mut expected_record = Vec::new();
+    loop {
+        let byte = (length & 0x7f) as u8;
+        length >>= 7;
+        expected_record.push(byte | if length == 0 { 0 } else { 0x80 });
+        if length == 0 {
+            break;
+        }
+    }
+    expected_record.extend_from_slice(path.as_bytes());
+    expected_record.push(0); // Compact Conventional count, with no line varints.
+    let id = path_id as usize;
+    assert_eq!(&paths[offsets[id]..offsets[id + 1]], expected_record);
+
+    let mut base = 0u64;
+    for earlier in 0..path_id {
+        base += match reader.path_table_kind(earlier).expect("earlier table kind") {
+            PathTableKind::Conventional => 100000 * 1024,
+            PathTableKind::Lines => (0..reader.line_count_raw(earlier))
+                .map(|line| {
+                    u64::from(
+                        reader
+                            .line_length_raw(earlier, line as u32)
+                            .expect("earlier table length"),
+                    )
+                })
+                .sum::<u64>(),
+            kind => panic!("column-aware recording contains incompatible table {kind:?}"),
+        };
+    }
+    let count = reader.step_count();
+    let mut positions = vec![0; count as usize];
+    let mut path_ids = vec![0; count as usize];
+    let mut lines = vec![0; count as usize];
+    assert_eq!(
+        reader
+            .step_global_line_indices(0, count, &mut positions)
+            .unwrap(),
+        count
+    );
+    assert_eq!(
+        reader
+            .step_locations(0, count, &mut path_ids, &mut lines)
+            .unwrap(),
+        count
+    );
+    let captured: Vec<u64> = positions
+        .iter()
+        .zip(path_ids.iter())
+        .filter(|(_, id)| **id == path_id)
+        .map(|(position, _)| *position - base)
+        .collect();
+    assert_eq!(captured, vec![(3 - 1) * 1024 + (9 - 1)]);
+}
+
+/// A real non-column-aware writer preserves the legacy Bare path format and
+/// missing columns. This control does not reinterpret empty Layout A tables.
+#[test]
+fn test_legacy_bare_path_retains_absent_column() {
+    use codetracer_trace_types::Line;
+    use codetracer_trace_writer_nim::{
+        NimTraceReaderHandle, NimTraceWriter, PathTableKind, TraceEventsFileFormat,
+    };
+    let temporary = tempfile::tempdir().expect("owned legacy recording scratch");
+    let mut writer = NimTraceWriter::new("legacy_bare_column", &[], TraceEventsFileFormat::Ctfs);
+    writer
+        .begin_writing_trace_events(&temporary.path().join("trace.json"))
+        .unwrap();
+    writer
+        .begin_writing_trace_metadata(&temporary.path().join("metadata.json"))
+        .unwrap();
+    writer
+        .begin_writing_trace_paths(&temporary.path().join("paths.json"))
+        .unwrap();
+    let source = temporary.path().join("legacy_source.cdc");
+    writer
+        .register_path_with_line_lengths(&source, &[])
+        .unwrap();
+    writer.register_step_with_column(&source, Line(3), None);
+    writer.close().expect("finalize real legacy container");
+    let container = assert_valid_ct_file(temporary.path());
+    let reader = NimTraceReaderHandle::open(container.to_str().unwrap()).unwrap();
+    assert!(!reader.has_column_aware_steps());
+    let source_id = (0..reader.path_count())
+        .find(|id| reader.path(*id).unwrap().ends_with("legacy_source.cdc"))
+        .unwrap();
+    assert_eq!(reader.path_table_kind(source_id), Some(PathTableKind::Bare));
+    let count = reader.step_count();
+    assert_eq!(count, 1);
+    let mut paths = vec![0; count as usize];
+    let mut lines = vec![0; count as usize];
+    let mut columns = vec![u64::MAX; count as usize];
+    assert_eq!(
+        reader
+            .step_locations_with_columns(0, count, &mut paths, &mut lines, &mut columns)
+            .unwrap(),
+        count
+    );
+    assert_eq!(paths, vec![source_id]);
+    assert_eq!(lines, vec![3]);
+    assert_eq!(columns, vec![0]); // The public reader's exact absent-column sentinel.
+    let optional: Vec<Option<u64>> = columns
+        .into_iter()
+        .map(|column| (column != 0).then_some(column))
+        .collect();
+    assert_eq!(optional, vec![None]);
 }
