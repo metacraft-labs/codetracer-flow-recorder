@@ -71,6 +71,13 @@ jobs:
       - name: Build
         run: dev-exec cargo build --all-targets
 
+      - name: Build the replay helper
+        # A flake package rather than a dev-shell build: the helper's FVM needs
+        # Go 1.26 and the dev shell's Go is 1.25 (flake.nix). Nothing runs it
+        # here, because a replay needs a Flow access node; the committed
+        # mainnet fixture under tests/fixtures/replay/ is what the tests read.
+        run: nix build .#cadence-replay-helper --no-link -L
+
       - name: Run tests with zero-test guard
         run: |
           set -euo pipefail

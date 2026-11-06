@@ -48,8 +48,53 @@ pub struct ReplayConfig {
     pub tx_hash: String,
     /// Flow Access Node URL.
     pub access_node_url: String,
-    /// Optional directory containing Cadence source files for source mapping.
+    /// Directory the executed Cadence sources are written to.
     pub source_dir: Option<PathBuf>,
+    /// Replay from the transcript in this directory (the helper's
+    /// `--from-inputs`) instead of reading the access node.
+    pub inputs: Option<PathBuf>,
+    /// Write a transcript of the run's inputs to this directory (the
+    /// helper's `--record-inputs`).
+    pub record_inputs: Option<PathBuf>,
+    /// The container's recording id: minted by the writer when `None`.
+    pub recording_id: Option<RecordingId>,
+}
+
+/// How a replay's container recording id is chosen when it is not minted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RecordingId {
+    /// Use this UUIDv7 verbatim; the writer validates it.
+    Pinned(String),
+    /// Derive it from the block timestamp and the transaction id
+    /// ([`derived_recording_id`]), so two replays of one transaction write
+    /// the same container.
+    Derive,
+}
+
+/// A valid UUIDv7 (RFC 9562) that is a function of the transaction alone: the
+/// 48-bit time field is the block's timestamp in milliseconds, so ids still
+/// sort by when the transaction ran, and the 74 "random" bits are the leading
+/// bits of the transaction id. The same layout as `codetracer-evm-recorder`'s
+/// `derived_recording_id`, from a millisecond timestamp because Flow's
+/// header states one.
+pub fn derived_recording_id(block_timestamp_ms: u64, tx_id: &[u8; 32]) -> String {
+    let ms = block_timestamp_ms & 0xFFFF_FFFF_FFFF;
+    let h = tx_id;
+    let mut b = [0u8; 16];
+    b[..6].copy_from_slice(&ms.to_be_bytes()[2..]);
+    b[6] = 0x70 | (h[0] & 0x0f);
+    b[7] = h[1];
+    b[8] = 0x80 | (h[2] & 0x3f);
+    b[9..].copy_from_slice(&h[3..10]);
+    let hex: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &hex[..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..]
+    )
 }
 
 impl ReplayConfig {
@@ -59,6 +104,9 @@ impl ReplayConfig {
             tx_hash: normalise_tx_hash(tx_hash),
             access_node_url: access_node_url.to_string(),
             source_dir: None,
+            inputs: None,
+            record_inputs: None,
+            recording_id: None,
         }
     }
 
@@ -90,11 +138,18 @@ fn normalise_tx_hash(hash: &str) -> String {
     hash.strip_prefix("0x").unwrap_or(hash).to_ascii_lowercase()
 }
 
-/// Default binary name for the Go helper.
-const DEFAULT_HELPER_BIN: &str = "cadence-trace-helper";
+/// Default binary name for the replay helper (`go-replay-helper/`).
+const DEFAULT_HELPER_BIN: &str = "cadence-replay-helper";
 
-/// Environment variable to override the Go helper binary path.
-const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
+/// Environment variable to override the replay helper binary path.
+const HELPER_BIN_ENV: &str = "CADENCE_REPLAY_HELPER_BIN";
+
+/// File the helper's verdict is written to, inside the output directory.
+pub const VERDICT_FILE: &str = "replay-verdict.json";
+
+/// Directory the executed Cadence sources are written to, inside the output
+/// directory, when `--source-dir` is not given.
+pub const SOURCES_DIR: &str = "sources";
 
 // ---------------------------------------------------------------------------
 // Replay pipeline
@@ -103,12 +158,17 @@ const HELPER_BIN_ENV: &str = "CADENCE_HELPER_BIN";
 /// Replay a Flow transaction and write a CodeTracer CTFS trace bundle.
 ///
 /// Pipeline:
-/// 1. Invoke the Go helper in `replay` mode with the transaction hash and
-///    access node URL. The helper fetches the transaction, executes its
-///    Cadence script through the emulator in fork mode, and emits NDJSON
-///    trace events on stdout.
+/// 1. Invoke the replay helper with the transaction id and access node. The
+///    helper re-executes the transaction with the network's FVM against the
+///    register state of its block's parent, after replaying the transactions
+///    that precede it in the block, and emits the interpreter's statement
+///    stream as NDJSON on stdout. It writes every Cadence source the stream
+///    entered into the source directory -- read from the same register state,
+///    so it is the code that ran -- and its verdict (whether the replay
+///    reproduced the on-chain result) to `replay-verdict.json`.
 /// 2. Parse the NDJSON output.
-/// 3. Write a CTFS bundle to `out_dir`.
+/// 3. Write a CTFS bundle to `out_dir`, with the transaction script as the
+///    entry source.
 ///
 /// The output format is fixed to CTFS — see
 /// `Recorder-CLI-Conventions.md` §4 in `codetracer-specs`.
@@ -123,42 +183,52 @@ fn replay_transaction_with_helper(
     out_dir: &Path,
     helper_bin: &str,
 ) -> Result<()> {
-    let mut cmd = Command::new(helper_bin);
-    cmd.arg("replay")
-        .arg("--tx-hash")
+    let source_dir = config
+        .source_dir
+        .clone()
+        .unwrap_or_else(|| out_dir.join(SOURCES_DIR));
+    std::fs::create_dir_all(&source_dir)
+        .with_context(|| format!("cannot create source dir: {}", source_dir.display()))?;
+
+    let mut command = Command::new(helper_bin);
+    command
+        .arg("replay")
+        .arg("--tx-id")
         .arg(&config.tx_hash)
         .arg("--access-node")
-        .arg(&config.access_node_url);
-
-    if let Some(ref source_dir) = config.source_dir {
-        cmd.arg("--source-dir").arg(source_dir);
+        .arg(&config.access_node_url)
+        .arg("--source-dir")
+        .arg(&source_dir)
+        .arg("--verdict-out")
+        .arg(out_dir.join(VERDICT_FILE));
+    if let Some(inputs) = &config.inputs {
+        command.arg("--from-inputs").arg(inputs);
     }
-
-    let output = cmd.output().with_context(|| {
+    if let Some(record) = &config.record_inputs {
+        command.arg("--record-inputs").arg(record);
+    }
+    let output = command.output().with_context(|| {
         format!(
-            "failed to run Cadence helper binary '{}' in replay mode. \
-             Make sure the Go helper is built and either:\n  \
-             - it is on your $PATH as '{}', or\n  \
-             - the {} environment variable points to the binary",
+            "failed to run replay helper '{}'. Build it from go-replay-helper/ \
+                 and either:\n  \
+                 - put it on your $PATH as '{}', or\n  \
+                 - point the {} environment variable at the binary",
             helper_bin, DEFAULT_HELPER_BIN, HELPER_BIN_ENV
         )
     })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let boundary_hint = replay_helper_boundary_hint(&stderr);
         return Err(eyre!(
-            "Cadence helper '{}' replay mode exited with status {}: {}{}",
+            "replay helper '{}' exited with status {}: {}",
             helper_bin,
             output.status,
-            stderr.trim(),
-            boundary_hint
+            stderr.trim()
         ));
     }
 
-    let stdout =
-        String::from_utf8(output.stdout).with_context(|| "Go helper produced non-UTF-8 output")?;
-
+    let stdout = String::from_utf8(output.stdout)
+        .with_context(|| "replay helper produced non-UTF-8 output")?;
     let events = parse_ndjson(&stdout)?;
 
     eprintln!(
@@ -167,25 +237,71 @@ fn replay_transaction_with_helper(
         config.tx_hash
     );
 
-    // Use a synthetic source path based on the transaction hash.
-    let source_path = config
-        .source_dir
-        .as_deref()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!("tx_{}.cdc", config.tx_hash));
-
-    CadenceTracer::trace_program_from_events(&source_path, &events, out_dir)
+    let source_path = entry_source_path(&events, &source_dir, &config.tx_hash);
+    let recording_id = match &config.recording_id {
+        None => None,
+        Some(RecordingId::Pinned(id)) => Some(id.clone()),
+        Some(RecordingId::Derive) => Some(derive_from_verdict(&out_dir.join(VERDICT_FILE))?),
+    };
+    CadenceTracer::trace_program_from_events_with_recording_id(
+        &source_path,
+        &events,
+        out_dir,
+        recording_id.as_deref(),
+    )
 }
 
-fn replay_helper_boundary_hint(stderr: &str) -> &'static str {
-    if stderr.contains("error reading source file") && stderr.contains("replay") {
-        "\nReplay helper API boundary: the current Go helper appears to treat \
-         'replay' as a source-file path instead of a replay subcommand. \
-         On-chain state/event coverage is blocked until cadence-trace-helper \
-         implements replay mode and emits resource_* / event NDJSON records."
-    } else {
-        ""
+/// The derived recording id of the replay whose verdict is at `path`.
+fn derive_from_verdict(path: &Path) -> Result<String> {
+    let verdict: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?,
+    )?;
+    let ms = verdict["blockTimestampMs"]
+        .as_u64()
+        .filter(|ms| *ms > 0)
+        .ok_or_else(|| eyre!("{} states no blockTimestampMs", path.display()))?;
+    let id = verdict["transactionId"]
+        .as_str()
+        .ok_or_else(|| eyre!("{} states no transactionId", path.display()))?;
+    let mut bytes = [0u8; 32];
+    if id.len() != 64 {
+        return Err(eyre!("transaction id {id} is not 32 bytes of hex"));
     }
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&id[2 * i..2 * i + 2], 16)
+            .map_err(|e| eyre!("transaction id {id}: {e}"))?;
+    }
+    Ok(derived_recording_id(ms, &bytes))
+}
+
+/// The entry source of a replayed transaction: the transaction script, which
+/// the helper names after its Cadence location, `t.<script hash>.cdc`. It is
+/// not simply the first step's file: the FVM runs the fee contracts' payer
+/// balance check before the transaction body, so on mainnet the first step is
+/// in `FlowFees`. Without a step in the script, the first step's file is
+/// used, and with no step at all, a name in the source directory.
+fn entry_source_path(
+    events: &[crate::tracer::TraceEvent],
+    source_dir: &Path,
+    tx_hash: &str,
+) -> PathBuf {
+    let step_files = || {
+        events.iter().filter_map(|event| match event {
+            crate::tracer::TraceEvent::Step { file, .. } if !file.is_empty() => {
+                // The helper names files relative to the source directory.
+                Some(source_dir.join(file))
+            }
+            _ => None,
+        })
+    };
+    step_files()
+        .find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with("t."))
+        })
+        .or_else(|| step_files().next())
+        .unwrap_or_else(|| source_dir.join(format!("t.{tx_hash}.cdc")))
 }
 
 // ---------------------------------------------------------------------------
@@ -332,17 +448,135 @@ mod tests {
         );
     }
 
+    /// The pipeline hands the helper the transaction id, access node, a
+    /// source directory and a verdict path, and takes the entry source from
+    /// the first step rather than inventing one. A stand-in helper records
+    /// its arguments and plays back NDJSON whose first step is in the
+    /// transaction script and whose second is in an imported contract.
+    #[cfg(unix)]
     #[test]
-    fn test_replay_helper_missing_subcommand_diagnostic() {
-        let stderr = "error reading source file: open replay: no such file or directory";
-        let hint = replay_helper_boundary_hint(stderr);
-        assert!(
-            hint.contains("Replay helper API boundary"),
-            "expected explicit replay helper boundary diagnostic, got {hint:?}"
+    fn test_replay_passes_helper_contract_and_uses_first_step_as_entry() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let out_dir = tmp.path().join("out");
+        let args_file = tmp.path().join("args.txt");
+        let helper = tmp.path().join("fake-helper.sh");
+        std::fs::write(
+            &helper,
+            format!(
+                "#!/bin/sh\n\
+                 printf '%s\\n' \"$@\" > '{args}'\n\
+                 dir=''; prev=''\n\
+                 for a in \"$@\"; do [ \"$prev\" = '--source-dir' ] && dir=\"$a\"; prev=\"$a\"; done\n\
+                 printf 'transaction {{ execute {{ }} }}\\n' > \"$dir/t.abcd.cdc\"\n\
+                 printf 'access(all) contract C {{}}\\n' > \"$dir/A.0000000000000001.C.cdc\"\n\
+                 echo '{{\"type\":\"call\",\"name\":\"execute\"}}'\n\
+                 echo \"{{\\\"type\\\":\\\"step\\\",\\\"file\\\":\\\"t.abcd.cdc\\\",\\\"line\\\":1,\\\"column\\\":15}}\"\n\
+                 echo \"{{\\\"type\\\":\\\"step\\\",\\\"file\\\":\\\"A.0000000000000001.C.cdc\\\",\\\"line\\\":1}}\"\n\
+                 echo '{{\"type\":\"return\"}}'\n",
+                args = args_file.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&helper, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        std::fs::create_dir_all(&out_dir).unwrap();
+        let config = ReplayConfig::new("0xABCD", "access.example:9000");
+        replay_transaction_with_helper(&config, &out_dir, helper.to_str().unwrap())
+            .expect("replay should succeed with the stand-in helper");
+
+        let args: Vec<String> = std::fs::read_to_string(&args_file)
+            .unwrap()
+            .lines()
+            .map(str::to_string)
+            .collect();
+        let sources = out_dir.join(SOURCES_DIR);
+        assert_eq!(
+            args,
+            vec![
+                "replay".to_string(),
+                "--tx-id".into(),
+                "abcd".into(),
+                "--access-node".into(),
+                "access.example:9000".into(),
+                "--source-dir".into(),
+                sources.display().to_string(),
+                "--verdict-out".into(),
+                out_dir.join(VERDICT_FILE).display().to_string(),
+            ]
         );
         assert!(
-            hint.contains("resource_* / event NDJSON"),
-            "diagnostic should name the missing replay-side state/event schema, got {hint:?}"
+            std::fs::read_dir(&out_dir)
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .any(|e| e.path().extension().is_some_and(|ext| ext == "ct")),
+            "CTFS container missing"
+        );
+
+        // The shape a mainnet replay has: the fee contract's balance check
+        // runs before the transaction body.
+        let fees = sources.join("A.f919ee77447b7497.FlowFees.cdc");
+        let script = sources.join("t.abcd.cdc");
+        let events = parse_ndjson(&format!(
+            "{{\"type\":\"step\",\"file\":\"{}\",\"line\":1}}\n\
+             {{\"type\":\"step\",\"file\":\"{}\",\"line\":1}}",
+            fees.display(),
+            script.display()
+        ))
+        .unwrap();
+        assert_eq!(
+            entry_source_path(&events, &sources, "abcd"),
+            script,
+            "the entry is the transaction script even when a fee contract steps first"
+        );
+        assert_eq!(
+            entry_source_path(&events[..1], &sources, "abcd"),
+            fees,
+            "with no step in the script, the entry is the first step's file"
+        );
+        assert_eq!(
+            entry_source_path(&[], &sources, "abcd"),
+            sources.join("t.abcd.cdc"),
+            "with no step, the entry falls back to the transaction location's name"
+        );
+    }
+}
+
+#[cfg(test)]
+mod recording_id_tests {
+    use super::derived_recording_id;
+
+    /// The derived id is a well-formed UUIDv7 whose time field is the block's
+    /// millisecond timestamp, and it depends on the transaction: the control
+    /// is a second transaction in the same block, which must get another id.
+    #[test]
+    fn derived_ids_are_uuidv7_of_the_block_time_and_the_transaction() {
+        // Mainnet block 168,391,034 and the two user transactions in it.
+        let ms = 1_760_964_548_123_u64;
+        let mut a = [0u8; 32];
+        a[..4].copy_from_slice(&[0xc8, 0xf9, 0x19, 0x07]);
+        let mut b = a;
+        b[3] = 0x08;
+
+        let id = derived_recording_id(ms, &a);
+        assert_eq!(id, derived_recording_id(ms, &a), "a function of its inputs");
+        let parts: Vec<&str> = id.split('-').collect();
+        assert_eq!(
+            parts.iter().map(|p| p.len()).collect::<Vec<_>>(),
+            [8, 4, 4, 4, 12]
+        );
+        assert!(parts[2].starts_with('7'), "version 7: {id}");
+        assert!(
+            matches!(parts[3].chars().next(), Some('8' | '9' | 'a' | 'b')),
+            "RFC 9562 variant: {id}"
+        );
+        let time = u64::from_str_radix(&format!("{}{}", parts[0], parts[1]), 16).unwrap();
+        assert_eq!(time, ms, "the time field is the block's timestamp");
+        assert_ne!(
+            id,
+            derived_recording_id(ms, &b),
+            "control: another transaction"
         );
     }
 }

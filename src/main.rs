@@ -92,9 +92,11 @@ enum Commands {
 
     /// Replay a Flow on-chain transaction.
     ///
-    /// Fetches the transaction from a Flow Access Node, extracts its
-    /// Cadence script and arguments, replays execution through the
-    /// Go tracer helper, and writes a CTFS bundle to `--out-dir`.
+    /// Re-executes the transaction with the network's FVM against the
+    /// register state its block started from (after the transactions that
+    /// precede it in the block), through `cadence-replay-helper`, and writes
+    /// a CTFS bundle, the executed sources and `replay-verdict.json` to
+    /// `--out-dir`.
     Replay(ReplayArgs),
 
     /// Print version information.
@@ -111,9 +113,26 @@ struct ReplayArgs {
     #[arg(long, default_value = codetracer_flow_recorder::replay::DEFAULT_ACCESS_NODE_URL)]
     access_node: String,
 
-    /// Optional directory containing Cadence source files for source mapping.
+    /// Directory the executed Cadence sources are written to (defaults to
+    /// `<out-dir>/sources`).
     #[arg(long)]
     source_dir: Option<PathBuf>,
+
+    /// Replay from a transcript a previous `--record-inputs` run wrote, with
+    /// no access node: the same FVM re-executes the same inputs.
+    #[arg(long)]
+    inputs: Option<PathBuf>,
+
+    /// Write a transcript of this run's inputs (block, transactions, the
+    /// chain's result and every parent-state register read) to this directory.
+    #[arg(long)]
+    record_inputs: Option<PathBuf>,
+
+    /// The container's recording id: a UUIDv7 to use verbatim, or `derive` to
+    /// compute one from the block timestamp and the transaction id, so that
+    /// two replays of one transaction write the same bytes. Minted when omitted.
+    #[arg(long)]
+    recording_id: Option<String>,
 
     /// Directory where the trace files will be written.
     ///
@@ -230,6 +249,12 @@ fn replay(args: ReplayArgs) -> Result<()> {
     if let Some(source_dir) = args.source_dir {
         config = config.with_source_dir(source_dir);
     }
+    config.inputs = args.inputs;
+    config.record_inputs = args.record_inputs;
+    config.recording_id = args.recording_id.map(|v| match v.as_str() {
+        "derive" => codetracer_flow_recorder::replay::RecordingId::Derive,
+        _ => codetracer_flow_recorder::replay::RecordingId::Pinned(v),
+    });
 
     eprintln!(
         "Replaying transaction {} via {}",
