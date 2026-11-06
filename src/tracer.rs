@@ -867,6 +867,12 @@ impl CadenceTracer {
                 err,
             );
         }
+        // A file sized from its own per-line table has a column axis too.
+        // Without this arm every source readable from disk — the normal
+        // case for `record` — would have its step columns withheld.
+        if !line_lengths.is_empty() {
+            self.paths_with_column_axis.insert(path.to_path_buf());
+        }
         self.paths_with_line_lengths.insert(path.to_path_buf());
     }
 
