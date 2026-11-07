@@ -10,7 +10,9 @@
 //!    Records a fixture and pipes the resulting `.ct` container through
 //!    `ct print` from `codetracer-trace-format-nim` for content-level
 //!    assertions.  Skips gracefully when run outside the metacraft
-//!    workspace.
+//!    workspace.  Under `CODETRACER_FLOW_RECORDER_REQUIRE_CT_PRINT=1`
+//!    (set by CI, which builds ct-print first) a missing `ct-print` fails
+//!    the test instead of skipping it.  See `tests/common/mod.rs`.
 //!
 //! 3. **CLI env-var contract**: Exercises the post-2026-05-08
 //!    `CODETRACER_FLOW_RECORDER_OUT_DIR` /
@@ -34,6 +36,9 @@ use std::process::Command;
 
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer, TraceEvent};
 
+mod common;
+use common::{ct_print_absent, ct_print_path, ct_print_required};
+
 /// CTFS magic bytes: C0 DE 72 AC E2
 const CTFS_MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 
@@ -43,20 +48,6 @@ const CTFS_MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 
 fn test_programs_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("test-programs/cadence")
-}
-
-/// Path to the `ct-print` binary shipped with `codetracer-trace-format-nim`.
-///
-/// The Flow recorder is CTFS-only; tests that need to make
-/// content-level assertions on a recorded trace pipe the `.ct`
-/// container through `ct-print --json` and assert on the resulting
-/// JSON.  This is the same workflow that `Recorder-CLI-Conventions.md`
-/// §4 prescribes for downstream tools / golden snapshots.
-fn ct_print_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("codetracer-trace-format-nim")
-        .join(format!("ct-print{}", std::env::consts::EXE_SUFFIX))
 }
 
 fn flow_test_ndjson() -> &'static str {
@@ -333,12 +324,11 @@ fn test_nested_resource_tracking() {
 #[test]
 fn test_recorded_trace_via_ct_print_json() {
     let ct_print = ct_print_path();
-    if !ct_print.exists() {
-        eprintln!(
-            "SKIP: ct-print not found at {} — only available within the \
-             metacraft workspace where codetracer-trace-format-nim is a sibling.",
-            ct_print.display()
-        );
+    if ct_print_absent(
+        "test_recorded_trace_via_ct_print_json",
+        &ct_print,
+        ct_print_required(),
+    ) {
         return;
     }
 
@@ -773,19 +763,13 @@ fn test_go_helper_cli_record() {
 // `[...]` array and `{...}` dict literal shapes from the value text
 // alone).  The strict pins below assert the spec-compliant shape.
 
-/// Skip-helper: returns `Some(path)` to ct-print or logs a clear
-/// `SKIP:` diagnostic and returns `None`.  The
-/// `verify-cli-convention-no-silent-skip.sh` script greps for the
-/// literal `SKIP:` token, so silent skips remain forbidden.
+/// Skip-helper: returns `Some(path)` to ct-print, or returns `None` after
+/// a clear `SKIP:` diagnostic.  Under `CODETRACER_FLOW_RECORDER_REQUIRE_CT_PRINT=1`
+/// (set in CI) a missing ct-print panics instead of skipping, so the
+/// `SKIP:` path is never taken where the sibling is supposed to exist.
 fn ct_print_or_skip(test_name: &str) -> Option<PathBuf> {
     let p = ct_print_path();
-    if !p.exists() {
-        eprintln!(
-            "SKIP: {test_name} requires ct-print at {} — only available \
-             within the metacraft workspace where codetracer-trace-format-nim \
-             is a sibling.",
-            p.display()
-        );
+    if ct_print_absent(test_name, &p, ct_print_required()) {
         return None;
     }
     Some(p)
@@ -6625,4 +6609,28 @@ fn test_legacy_bare_path_retains_absent_column() {
         .map(|column| (column != 0).then_some(column))
         .collect();
     assert_eq!(optional, vec![None]);
+}
+
+// The gate that decides between skipping and failing when ct-print is missing.
+// Neither branch needs a ct-print binary: the missing case uses a path that
+// does not exist, and the present case uses a file that always exists.
+#[test]
+fn test_missing_ct_print_skips_locally_and_fails_when_required() {
+    let missing = PathBuf::from("/nonexistent/codetracer-trace-format-nim/ct-print");
+    assert!(
+        ct_print_absent("probe", &missing, false),
+        "a missing ct-print must be reported as a skip when not required",
+    );
+
+    let required_missing = std::panic::catch_unwind(|| ct_print_absent("probe", &missing, true));
+    assert!(
+        required_missing.is_err(),
+        "a missing ct-print must panic when CODETRACER_FLOW_RECORDER_REQUIRE_CT_PRINT=1",
+    );
+
+    let present = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
+    assert!(
+        !ct_print_absent("probe", &present, true),
+        "an existing ct-print must not be reported as missing",
+    );
 }

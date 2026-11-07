@@ -29,6 +29,9 @@ use std::process::Command;
 use codetracer_flow_recorder::tracer::{parse_ndjson, CadenceTracer};
 use codetracer_trace_types::{EventLogKind, TraceLowLevelEvent};
 
+mod common;
+use common::{ct_print_absent, ct_print_path, ct_print_required};
+
 /// Canonical CTFS multi-stream container magic bytes.
 const CTFS_MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 
@@ -369,16 +372,6 @@ fn test_replay_on_chain_state_and_event_ndjson_routes_to_special_events() {
 // FU-Column-Aware-Nav-Flow: column-aware replay-navigation
 // ---------------------------------------------------------------------------
 
-/// Path to the `ct-print` binary shipped with `codetracer-trace-format-nim`.
-/// Mirrors `tests/test_tracer.rs::ct_print_path` so the column-aware test
-/// is co-located with the rest of the audit suite.
-fn ct_print_path() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("codetracer-trace-format-nim")
-        .join(format!("ct-print{}", std::env::consts::EXE_SUFFIX))
-}
-
 /// The Flow recorder must opt the CTFS writer into column-aware step
 /// encoding so that `meta.dat` bit 4 (`FLAG_HAS_COLUMN_AWARE_STEPS`)
 /// is set on every recorded trace.  Mirrors the Cairo recorder's
@@ -406,12 +399,11 @@ fn ct_print_path() -> PathBuf {
 #[test]
 fn test_column_aware_steps_flag_and_distinct_columns() {
     let ct_print = ct_print_path();
-    if !ct_print.exists() {
-        eprintln!(
-            "SKIP: ct-print not found at {} — only available within the \
-             metacraft workspace where codetracer-trace-format-nim is a sibling.",
-            ct_print.display()
-        );
+    if ct_print_absent(
+        "test_column_aware_steps_flag_and_distinct_columns",
+        &ct_print,
+        ct_print_required(),
+    ) {
         return;
     }
 
