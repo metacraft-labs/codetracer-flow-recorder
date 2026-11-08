@@ -2024,7 +2024,10 @@ fn test_resource_capability_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    assert_eq!(counts["steps"].as_u64(), Some(15), "steps; counts={counts}");
+    // The resource_create / resource_destroy records are reported from
+    // inside the statement whose step is already open, so they add no step
+    // of their own (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(11), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(4), "calls; counts={counts}");
     // 4 resource lifecycle events: create Coin, create Vault,
     // destroy Coin (inside deposit), destroy Vault.
@@ -2035,8 +2038,8 @@ fn test_resource_capability_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 15 steps + 4 call_entry + 4 call_exit + 4 io = 27 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 27, "events.len()");
+    // 11 steps + 4 call_entry + 4 call_exit + 4 io = 23 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 23, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence ---------------------------------------------
@@ -2386,10 +2389,11 @@ fn test_account_storage_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 13 explicit step + 2 implicit steps from resource_create / destroy
-    // (each lifecycle event also calls `register_step` at its line) +
-    // 1 implicit start step from `TraceWriter::start` = 16.
-    assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
+    // 13 explicit step + 1 implicit start step from `TraceWriter::start`
+    // = 14.  The resource_create / resource_destroy records are reported
+    // from inside the statement whose step is already open, so they add
+    // no step of their own (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy).
     assert_eq!(
@@ -2399,8 +2403,8 @@ fn test_account_storage_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 16 steps + 3 call_entry + 3 call_exit + 2 io = 24 events (call counts include the <toplevel> root)
-    assert_eq!(events.len(), 24, "events.len()");
+    // 14 steps + 3 call_entry + 3 call_exit + 2 io = 22 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 22, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Each Path surfaces as a typed Struct {domain, identifier} -
@@ -2502,9 +2506,10 @@ fn test_references_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 13 explicit step + 2 implicit steps from resource_create / destroy
-    // + 1 implicit start step = 16.
-    assert_eq!(counts["steps"].as_u64(), Some(16), "steps; counts={counts}");
+    // 13 explicit step + 1 implicit start step = 14.  The resource_create /
+    // resource_destroy records add no step: they are reported from inside
+    // the statement whose step is already open (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy).
     assert_eq!(
@@ -2514,8 +2519,8 @@ fn test_references_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 16 steps + 6 call_entry + 6 call_exit + 2 io = 30 events (call counts include the <toplevel> root)
-    assert_eq!(events.len(), 30, "events.len()");
+    // 14 steps + 6 call_entry + 6 call_exit + 2 io = 28 events (call counts include the <toplevel> root)
+    assert_eq!(events.len(), 28, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
@@ -3340,9 +3345,11 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 16 explicit step events + 2 implicit steps (resource_create +
-    // resource_destroy) + 1 implicit start step = 19 step records.
-    assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
+    // 16 explicit step events + 1 implicit start step = 17 step records.
+    // resource_create / resource_destroy add no step: they are reported
+    // from inside the statement whose step is already open
+    // (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(17), "steps; counts={counts}");
     // main, compute, deposit × 3 = 5 calls.
     assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 2 resource lifecycle events (create + destroy) + 2 errors
@@ -3357,8 +3364,8 @@ fn test_pre_post_conditions_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 19 steps + 6 call_entry + 6 call_exit + 4 io = 35 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 35, "events.len()");
+    // 17 steps + 6 call_entry + 6 call_exit + 4 io = 33 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 33, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering: main → compute → deposit×3 ---------------
@@ -3681,9 +3688,11 @@ fn test_interfaces_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 13 explicit step events + 4 implicit steps from resource_create
-    // (×2) and resource_destroy (×2) + 1 implicit start step = 18.
-    assert_eq!(counts["steps"].as_u64(), Some(18), "steps; counts={counts}");
+    // 13 explicit step events + 1 implicit start step = 14.  The
+    // resource_create (×2) and resource_destroy (×2) records add no step:
+    // they are reported from inside the statement whose step is already
+    // open (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     // main, compute, consume, Provider.provide, MyVault.provide = 5.
     assert_eq!(counts["calls"].as_u64(), Some(6), "calls; counts={counts}");
     // 4 resource lifecycle events (create + destroy of MyVault and Vault).
@@ -3694,8 +3703,8 @@ fn test_interfaces_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 18 steps + 6 call_entry + 6 call_exit + 4 io = 34 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 34, "events.len()");
+    // 14 steps + 6 call_entry + 6 call_exit + 4 io = 30 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 30, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call sequence: interface frame entered before concrete ---
@@ -3889,10 +3898,11 @@ fn test_resource_collections_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 18 explicit step events + 5 implicit steps from resource_create
-    // (x5) + 5 implicit steps from resource_destroy (x5) + 1 implicit
-    // start step = 29 step records.
-    assert_eq!(counts["steps"].as_u64(), Some(29), "steps; counts={counts}");
+    // 18 explicit step events + 1 implicit start step = 19 step records.
+    // The resource_create (x5) and resource_destroy (x5) records add no
+    // step: they are reported from inside the statement whose step is
+    // already open (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(19), "steps; counts={counts}");
     // main + compute = 2 calls.
     assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 5 lifecycle creates + 5 lifecycle destroys = 10 io_events.
@@ -3903,8 +3913,8 @@ fn test_resource_collections_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 29 steps + 3 call_entry + 3 call_exit + 10 io = 45 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 45, "events.len()");
+    // 19 steps + 3 call_entry + 3 call_exit + 10 io = 35 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 35, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
@@ -4291,10 +4301,11 @@ fn test_optional_chaining_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // Explicit step events + implicit steps from resource_create /
-    // resource_destroy emit one step per event.  Total = 20 (incl.
-    // 1 implicit start step).
-    assert_eq!(counts["steps"].as_u64(), Some(20), "steps; counts={counts}");
+    // Explicit step events + 1 implicit start step = 14.  The
+    // resource_create / resource_destroy records add no step: they are
+    // reported from inside the statement whose step is already open
+    // (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(14), "steps; counts={counts}");
     // main + compute = 2 calls.
     assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // 6 lifecycle io_events + 1 ForceNilUnwrap = 7.
@@ -4305,8 +4316,8 @@ fn test_optional_chaining_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 20 steps + 3 call_entry + 3 call_exit + 7 io = 33 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 33, "events.len()");
+    // 14 steps + 3 call_entry + 3 call_exit + 7 io = 27 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 27, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Call ordering ---------------------------------------------
@@ -6150,11 +6161,11 @@ fn test_attachments_test_via_ct_print_full() {
 
     // ----- counts -----------------------------------------------------
     let counts = &doc["counts"];
-    // 7 explicit step events plus 2 implicit steps emitted by the
-    // resource_create / resource_destroy lifecycle records (each
-    // routes through `register_step` ahead of the per-resource
-    // typed local) = 9 step records.
-    assert_eq!(counts["steps"].as_u64(), Some(9), "steps; counts={counts}");
+    // 7 explicit step events = 7 step records.  The resource_create /
+    // resource_destroy lifecycle records add no step: they are reported
+    // from inside the statement whose step is already open
+    // (`open_resource_step`).
+    assert_eq!(counts["steps"].as_u64(), Some(7), "steps; counts={counts}");
     assert_eq!(counts["calls"].as_u64(), Some(3), "calls; counts={counts}");
     // resource_create + resource_destroy + attach + remove = 4 io_events.
     assert_eq!(
@@ -6164,8 +6175,8 @@ fn test_attachments_test_via_ct_print_full() {
     );
 
     let events = doc["events"].as_array().expect("events array");
-    // 9 steps + 3 call_entry + 3 call_exit + 4 io = 19 events (call counts include the <toplevel> root).
-    assert_eq!(events.len(), 19, "events.len()");
+    // 7 steps + 3 call_entry + 3 call_exit + 4 io = 17 events (call counts include the <toplevel> root).
+    assert_eq!(events.len(), 17, "events.len()");
     assert_step_indices_monotonic(&doc);
 
     // ----- Tagged attachment io_events (attach / remove pair) --------
