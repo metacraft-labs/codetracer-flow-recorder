@@ -48,12 +48,57 @@ lifecycle events, and writes a CTFS bundle to `--out-dir`.
 #### Replay a Flow on-chain transaction
 
 ```bash
-codetracer-flow-recorder replay --tx-hash <tx-hash> --out-dir <dir>
+just build-replay-helper   # once: target/replay-helper/bin/cadence-replay-helper
+CADENCE_REPLAY_HELPER_BIN=target/replay-helper/bin/cadence-replay-helper \
+  codetracer-flow-recorder replay --tx-hash <tx-id> --out-dir <dir>
 ```
 
-Fetches the transaction from a Flow Access Node, extracts its Cadence
-script and arguments, replays execution through the Go tracer helper,
-and writes a CTFS bundle to `--out-dir`.
+Re-executes the transaction with the network's own FVM (flow-go pinned to
+the release mainnet runs, in `go-replay-helper/`) against the register
+state an access node serves for the parent of its block, after re-executing
+the transactions that precede it in the block, with Cadence's statement
+debugger attached. `--out-dir` receives:
+
+- the CTFS container, named after the transaction's Cadence location;
+- `sources/`, every Cadence location the execution entered, read from the
+  same register state -- so the contract source is the code that ran, not
+  the account's current code;
+- `replay-verdict.json`: the block, index and prestate height, the proposer,
+  payer and authorizers, and whether the replay **reproduced** the chain's
+  result (status and every event, with values), plus an untraced control run
+  so that observing the execution is shown not to have changed it.
+
+The public mainnet access node serves register state from the current
+spork's root block (137,390,146) to the sealed tip. Not reproduced yet:
+Cadence's `getBlock(at:)` and the per-block entropy behind `revertibleRandom`.
+`just replay-smoke` replays a mainnet transaction and fails unless it
+reproduced.
+
+`--record-inputs <dir>` writes a transcript of everything the run read (the
+block header, the block's transactions, the chain's result and every
+parent-state register), and `--inputs <dir>` replays from it with no access
+node: the same FVM re-executes the same inputs and produces the same stream.
+A transcript authenticates its bodies -- the header must hash to its block id
+and every transaction to its id -- and a register it does not hold fails the
+run rather than reading as absent.
+
+The helper has two measuring subcommands of its own:
+
+- `cadence-replay-helper probe-floor [--access-node host:port]` bisects the
+  lowest height whose registers the node serves, and records the refusal one
+  block below and the node's own spork root beside it. Measured 2026-10-20:
+  the current mainnet node serves from 137,390,146 (its spork root) and the
+  previous spork's node, `access-001.mainnet27.nodes.onflow.org:9000`, from
+  130,290,659 to 137,390,145. Each is that node's retention, not the chain's
+  floor.
+- `cadence-replay-helper block --height <h>` lists a block's transactions in
+  execution order with their proposer, payer and authorizers, marking the
+  protocol's system transactions.
+
+Replaying a transaction from the previous spork with this FVM (v0.51.1) does
+not reproduce it: measured on five, the events are the same and the fee is
+not, because that spork's blocks were executed by flow-go v0.44, which
+meters computation differently.
 
 #### Convert a recorded trace to JSON
 
