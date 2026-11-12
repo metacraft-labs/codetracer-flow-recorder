@@ -23,8 +23,11 @@ check-cargo-lock:
 build-release:
   cargo build --release --locked
 
+# Build the ct-print decoder in the sibling codetracer-trace-format-nim checkout,
+# with the tools this environment already provides (no direnv, which nothing
+# provisions on Windows).
 build-decoder:
-  cd ../codetracer-trace-format-nim && direnv exec . just build-ct-print
+  cd ../codetracer-trace-format-nim && nimble buildCtPrint
 
 test: build-decoder
   cargo test --locked

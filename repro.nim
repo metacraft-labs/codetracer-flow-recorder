@@ -39,11 +39,13 @@ package codetracer_flow_recorder:
     "cargo >=1.88"
     # C compiler driver — rustc links through `cc`, and build scripts
     # (cc-rs, the Nim FFI) compile C. Declaring it puts its directory on
-    # every cargo edge's PATH. Windows links with MSVC instead.
-    when defined(linux):
-      "gcc"
-    elif defined(macosx):
+    # every cargo edge's PATH. Windows links with MSVC instead, but the
+    # Justfile's `build-decoder` (`nimble buildCtPrint`) compiles ct-print
+    # with MinGW gcc there.
+    when defined(macosx):
       "clang"
+    else:
+      "gcc"
 
     # Nim toolchain — codetracer_trace_writer_nim's build.rs compiles
     # a static library at cargo build time.
@@ -62,9 +64,9 @@ package codetracer_flow_recorder:
     # zstd.h + libzstd for the sibling ct-print edge
     # (``build_writer_artifacts.buildCtPrint`` compiles and links against
     # them; ``zstd`` is the CLI only). The constructor cannot provision a
-    # tool from inside ``build:`` and refuses a recipe that omits it.
-    when not defined(windows):
-      "zstd-dev"
+    # tool from inside ``build:`` and refuses a recipe that omits it. On
+    # Windows it is the MinGW libzstd the Justfile's ct-print build links.
+    "zstd-dev"
 
     # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
     # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
@@ -79,13 +81,15 @@ package codetracer_flow_recorder:
       "chocolatey"
 
     # The unchanged CLI verification invokes Bash/dirname/grep and Cargo.
-    # POSIX-only: the Windows CI runner's path-mode tool-provisioning has
-    # no coreutils on PATH, so this gate stays Linux/macOS-only for now.
-    when not defined(windows):
-      "sh"
-      "bash"
-      "dirname"
-      "grep"
+    # Every platform: reprobuild (v0.2.23+) provisions these on Windows from
+    # Git for Windows when the runner's PATH lacks them.
+    "sh"
+    "bash"
+    "dirname"
+    "grep"
+    # just runs the Justfile recipes, which CI's cross-check steps call
+    # through `dev-exec` (`repro exec`), so it must be declared here.
+    "just"
 
   executable codetracerFlowRecorder:
     name: "codetracer-flow-recorder"
