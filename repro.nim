@@ -44,6 +44,12 @@ package codetracer_flow_recorder:
     # with MinGW gcc there.
     when defined(macosx):
       "clang"
+    elif defined(windows):
+      # A range, so that path mode refuses an old gcc found first on PATH
+      # (a Windows runner lists Free Pascal's gcc 2.95 ahead of a usable one,
+      # which fails every C compile with "<header>: Invalid argument") and
+      # falls through to the declared archive (WinLibs).
+      "gcc >=12"
     else:
       "gcc"
 
