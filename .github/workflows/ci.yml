@@ -51,7 +51,10 @@ jobs:
           attic-cache: ${{ vars.ATTIC_CACHE }}
           attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
 
-      - name: Build Nim trace writer library (sibling artifact)
+      - name: Build Nim trace writer library and ct-print (sibling artifacts)
+        # ct-print is the decoder the ct-print-backed tests run. It lands at the
+        # sibling root, where tests/common/mod.rs looks for it. Those tests
+        # fail, rather than skip, when it is missing (see the next step).
         run: |
           dev-exec bash -c '
             set -euo pipefail
@@ -59,17 +62,27 @@ jobs:
             nimble install -y stew results
             nim c --app:staticlib --mm:arc --noMain -d:release -p:src \
               -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+            nimble buildCtPrint
           '
           echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
+      - name: Check that Cargo.lock matches the pinned siblings
+        # The trace-format crates are path dependencies, so their dependencies
+        # live in this repo's Cargo.lock. Without `--locked` the steps below
+        # silently rewrote a stale lock and passed, while every `--locked`
+        # build elsewhere (`just build-release`, which codetracer's sibling
+        # build runs) failed on it. The same command as `just
+        # check-cargo-lock`, spelled out because the dev shell has no `just`.
+        run: dev-exec cargo metadata --locked --format-version 1 >/dev/null
 
       - name: Check formatting
         run: dev-exec cargo fmt -- --check
 
       - name: Run clippy
-        run: dev-exec cargo clippy --all-targets -- -D warnings
+        run: dev-exec cargo clippy --locked --all-targets -- -D warnings
 
       - name: Build
-        run: dev-exec cargo build --all-targets
+        run: dev-exec cargo build --locked --all-targets
 
       - name: Build the replay helper
         # A flake package rather than a dev-shell build: the helper's FVM needs
@@ -79,9 +92,14 @@ jobs:
         run: nix build .#cadence-replay-helper --no-link -L
 
       - name: Run tests with zero-test guard
+        env:
+          # A ct-print-backed test skips when ct-print is missing, and a skip
+          # passes. Fail the job instead, so a broken ct-print build cannot
+          # turn into green tests that assert nothing (tests/common/mod.rs).
+          CODETRACER_FLOW_RECORDER_REQUIRE_CT_PRINT: "1"
         run: |
           set -euo pipefail
-          OUTPUT=$(dev-exec cargo test --all-targets 2>&1) || { echo "$OUTPUT"; exit 1; }
+          OUTPUT=$(dev-exec cargo test --locked --all-targets 2>&1) || { echo "$OUTPUT"; exit 1; }
           echo "$OUTPUT"
           # Guard against silently empty test suites. Matched with bash's own
           # `[[ =~ ]]` rather than grep: this line runs in the step shell, not
