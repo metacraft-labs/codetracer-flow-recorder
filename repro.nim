@@ -145,14 +145,6 @@ package codetracer_flow_recorder:
     # §M4 — the whole-binary edge becomes a fan-out point without
     # changing this recipe.
 
-    # The decoder (ctPrint) and the bash CLI-convention verification are
-    # POSIX-only per the `uses:` guard above — Windows's path-mode tool
-    # provisioning has no coreutils/bash on PATH to resolve them with.
-    when not defined(windows):
-      const nimRoot = "../codetracer-trace-format-nim"
-      let decoderBuild = buildCtPrint(nimRoot)
-      let decoderBinary = ctPrintPath(nimRoot)
-
     let testsBuild = cargo.test(
       locked = true,
       noRun = true,
@@ -163,6 +155,22 @@ package codetracer_flow_recorder:
         "../codetracer-trace-format/codetracer_ctfs"
       ],
       extraOutputs = @["target/debug/deps"])
+
+    # The decoder (ctPrint) and the bash CLI-convention verification are
+    # POSIX-only per the `uses:` guard above — Windows's path-mode tool
+    # provisioning has no coreutils/bash on PATH to resolve them with.
+    #
+    # The decoder edge runs after the test build: that build's
+    # ``codetracer_trace_writer_nim`` ``build.rs`` is what installs the
+    # sibling's nimble ``requires`` (``results``, ``stew``) into the nimble
+    # path ``buildCtPrint``'s compile resolves them from (its doc comment
+    # asks a recorder to pass that edge here). Unordered, the two edges race
+    # and the compile fails with "cannot open file: results" on a host whose
+    # nimble store is empty.
+    when not defined(windows):
+      const nimRoot = "../codetracer-trace-format-nim"
+      let decoderBuild = buildCtPrint(nimRoot, after = @[testsBuild.action])
+      let decoderBinary = ctPrintPath(nimRoot)
 
     let testsRun = cargo.test(
       locked = true,
