@@ -834,8 +834,9 @@ impl CadenceTracer {
     ///
     /// Reads the source file from disk to compute the line lengths.
     /// Soft-fails (logged to stderr) if the file can't be read or
-    /// the FFI rejects the call — the trace remains usable, but
-    /// successful empty registration uses the current format's Conventional
+    /// the FFI rejects the call — the trace remains usable, but the file
+    /// then has no column axis and its steps are recorded without a column.
+    /// An empty line table registers the current format's Conventional
     /// table, whose 100000 lines each have 1024 column positions.
     /// Mirrors the EVM recorder's `ensure_path_with_line_lengths`.
     fn ensure_path_with_line_lengths(&mut self, path: &Path) {
@@ -856,7 +857,11 @@ impl CadenceTracer {
         };
         let registration =
             TraceWriter::register_path_with_line_lengths(&mut *self.writer, path, &line_lengths);
-        if line_lengths.is_empty() && registration.is_ok() {
+        // A successful registration gives the file a column axis whether the
+        // writer sized it from the source's own table or from the
+        // Conventional one used for an empty slice; only a failed one leaves
+        // it without.
+        if registration.is_ok() {
             self.paths_with_column_axis.insert(path.to_path_buf());
         }
         if let Err(err) = registration {
@@ -866,12 +871,6 @@ impl CadenceTracer {
                 path.display(),
                 err,
             );
-        }
-        // A file sized from its own per-line table has a column axis too.
-        // Without this arm every source readable from disk — the normal
-        // case for `record` — would have its step columns withheld.
-        if !line_lengths.is_empty() {
-            self.paths_with_column_axis.insert(path.to_path_buf());
         }
         self.paths_with_line_lengths.insert(path.to_path_buf());
     }

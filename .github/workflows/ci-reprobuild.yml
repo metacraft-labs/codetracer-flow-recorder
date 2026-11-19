@@ -75,7 +75,17 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: reprobuild
+          # reprobuild v0.2.26 (b9cf09b07e) on every leg. A leg whose OS/arch
+          # has a release archive (linux-x86_64, darwin-aarch64,
+          # windows-x86_64) installs `repro-version`; the others build
+          # `repro-build-pin` from source, so both name the same revision.
+          repro-version: v0.2.26
+          repro-build-pin: "b9cf09b07e2c780f314c4244e4c8df7988fc2e78"
           gh-token: ${{ steps.ci_token.outputs.token }}
+          # A job-scoped broker re-mints the Nix GitHub credential while
+          # setup and the build run, so it outlives the token's one hour.
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          app-private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           substituters: ${{ vars.SUBSTITUTERS }}
           trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
           attic-token: ${{ secrets.ATTIC_TOKEN }}
@@ -87,11 +97,14 @@ jobs:
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine identically to `just build`.
-        run: dev-exec repro build
+        # reprobuild v0.2.23 refuses `uses:` declarations without an explicit
+        # provisioning mode ("refusing implicit PATH fallback"); this recipe
+        # resolves its tools from the prepared environment's PATH.
+        run: dev-exec repro build --tool-provisioning=path
 
       - name: repro test
         # Materialises the `test` collection.
-        run: dev-exec repro test
+        run: dev-exec repro test --tool-provisioning=path
 
       - name: just build (cross-check)
         # Re-runs the legacy `just build` path inside the same env so

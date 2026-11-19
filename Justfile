@@ -7,11 +7,27 @@ default:
 build:
   cargo build --locked
 
+# Fail unless the committed Cargo.lock is the lock cargo resolves for this
+# tree, without changing it. `codetracer_trace_types`, `_trace_writer_nim` and
+# `codetracer_ctfs` are path dependencies on ../codetracer-trace-format, so
+# their own dependencies are written into OUR Cargo.lock: a trace-format commit
+# that adds one (codetracer_ctfs gaining `getrandom`) makes every `--locked`
+# build here fail until this lock is refreshed, and codetracer's
+# `scripts/build-siblings.sh` builds this recorder with `just build-release`.
+# Move the trace-format pin in repro.lock and refresh this lock in the same
+# commit (`cargo metadata --format-version 1 >/dev/null`, then commit both).
+# CI runs this against the pinned trace-format before anything else builds.
+check-cargo-lock:
+  cargo metadata --locked --format-version 1 >/dev/null
+
 build-release:
   cargo build --release --locked
 
+# Build the ct-print decoder in the sibling codetracer-trace-format-nim checkout,
+# with the tools this environment already provides (no direnv, which nothing
+# provisions on Windows).
 build-decoder:
-  cd ../codetracer-trace-format-nim && direnv exec . just build-ct-print
+  cd ../codetracer-trace-format-nim && nimble buildCtPrint
 
 test: build-decoder
   cargo test --locked

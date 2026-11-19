@@ -39,11 +39,19 @@ package codetracer_flow_recorder:
     "cargo >=1.88"
     # C compiler driver — rustc links through `cc`, and build scripts
     # (cc-rs, the Nim FFI) compile C. Declaring it puts its directory on
-    # every cargo edge's PATH. Windows links with MSVC instead.
-    when defined(linux):
-      "gcc"
-    elif defined(macosx):
+    # every cargo edge's PATH. Windows links with MSVC instead, but the
+    # Justfile's `build-decoder` (`nimble buildCtPrint`) compiles ct-print
+    # with MinGW gcc there.
+    when defined(macosx):
       "clang"
+    elif defined(windows):
+      # A range, so that path mode refuses an old gcc found first on PATH
+      # (a Windows runner lists Free Pascal's gcc 2.95 ahead of a usable one,
+      # which fails every C compile with "<header>: Invalid argument") and
+      # falls through to the declared archive (WinLibs).
+      "gcc >=12"
+    else:
+      "gcc"
 
     # Nim toolchain — codetracer_trace_writer_nim's build.rs compiles
     # a static library at cargo build time.
@@ -62,9 +70,9 @@ package codetracer_flow_recorder:
     # zstd.h + libzstd for the sibling ct-print edge
     # (``build_writer_artifacts.buildCtPrint`` compiles and links against
     # them; ``zstd`` is the CLI only). The constructor cannot provision a
-    # tool from inside ``build:`` and refuses a recipe that omits it.
-    when not defined(windows):
-      "zstd-dev"
+    # tool from inside ``build:`` and refuses a recipe that omits it. On
+    # Windows it is the MinGW libzstd the Justfile's ct-print build links.
+    "zstd-dev"
 
     # pkg-config + OpenSSL — openssl-sys consults pkg-config to find
     # OpenSSL on Linux/macOS. The Windows build uses the rustls-tls
@@ -79,13 +87,15 @@ package codetracer_flow_recorder:
       "chocolatey"
 
     # The unchanged CLI verification invokes Bash/dirname/grep and Cargo.
-    # POSIX-only: the Windows CI runner's path-mode tool-provisioning has
-    # no coreutils on PATH, so this gate stays Linux/macOS-only for now.
-    when not defined(windows):
-      "sh"
-      "bash"
-      "dirname"
-      "grep"
+    # Every platform: reprobuild (v0.2.23+) provisions these on Windows from
+    # Git for Windows when the runner's PATH lacks them.
+    "sh"
+    "bash"
+    "dirname"
+    "grep"
+    # just runs the Justfile recipes, which CI's cross-check steps call
+    # through `dev-exec` (`repro exec`), so it must be declared here.
+    "just"
 
   executable codetracerFlowRecorder:
     name: "codetracer-flow-recorder"
@@ -135,14 +145,6 @@ package codetracer_flow_recorder:
     # §M4 — the whole-binary edge becomes a fan-out point without
     # changing this recipe.
 
-    # The decoder (ctPrint) and the bash CLI-convention verification are
-    # POSIX-only per the `uses:` guard above — Windows's path-mode tool
-    # provisioning has no coreutils/bash on PATH to resolve them with.
-    when not defined(windows):
-      const nimRoot = "../codetracer-trace-format-nim"
-      let decoderBuild = buildCtPrint(nimRoot)
-      let decoderBinary = ctPrintPath(nimRoot)
-
     let testsBuild = cargo.test(
       locked = true,
       noRun = true,
@@ -153,6 +155,22 @@ package codetracer_flow_recorder:
         "../codetracer-trace-format/codetracer_ctfs"
       ],
       extraOutputs = @["target/debug/deps"])
+
+    # The decoder (ctPrint) and the bash CLI-convention verification are
+    # POSIX-only per the `uses:` guard above — Windows's path-mode tool
+    # provisioning has no coreutils/bash on PATH to resolve them with.
+    #
+    # The decoder edge runs after the test build: that build's
+    # ``codetracer_trace_writer_nim`` ``build.rs`` is what installs the
+    # sibling's nimble ``requires`` (``results``, ``stew``) into the nimble
+    # path ``buildCtPrint``'s compile resolves them from (its doc comment
+    # asks a recorder to pass that edge here). Unordered, the two edges race
+    # and the compile fails with "cannot open file: results" on a host whose
+    # nimble store is empty.
+    when not defined(windows):
+      const nimRoot = "../codetracer-trace-format-nim"
+      let decoderBuild = buildCtPrint(nimRoot, after = @[testsBuild.action])
+      let decoderBinary = ctPrintPath(nimRoot)
 
     let testsRun = cargo.test(
       locked = true,
