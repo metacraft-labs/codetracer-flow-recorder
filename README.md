@@ -72,7 +72,12 @@ The public mainnet access node serves register state from the current
 spork's root block (137,390,146) to the sealed tip. Not reproduced yet:
 Cadence's `getBlock(at:)` and the per-block entropy behind `revertibleRandom`.
 `just replay-smoke` replays a mainnet transaction and fails unless it
-reproduced.
+reproduced. CI runs it daily, and on demand from the Actions tab with a
+transaction of your choice (`.github/workflows/replay-smoke.yml`), rather than
+on every push: it needs the public access node, and an outage of a service
+this project does not run should not fail a pull request. A failed scheduled
+run still shows the regression, because the job fails rather than skips when
+the replay cannot run.
 
 `--record-inputs <dir>` writes a transcript of everything the run read (the
 block header, the block's transactions, the chain's result and every

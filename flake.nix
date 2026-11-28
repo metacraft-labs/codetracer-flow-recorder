@@ -54,6 +54,19 @@
             # runs, and a mismatched clippy can refuse to load at all.
             pkgs.rustfmt
             pkgs.clippy
+
+            # The Justfile's own runtime, so CI calls recipes by name
+            # (`dev-exec just lint`, `dev-exec just check-cargo-lock`,
+            # `dev-exec just replay-smoke`) instead of spelling their commands
+            # out, and so the shell does not depend on the host providing them:
+            # `just` runs the recipes; python3 runs `verify-package` and
+            # `bump-version`; ruby syntax-checks the Homebrew formula in
+            # `verify-packaging-sources`, which fails rather than skips without
+            # it; jq reads the verdict in `replay-smoke`.
+            pkgs.just
+            pkgs.python3
+            pkgs.ruby
+            pkgs.jq
           ];
 
           # `cargo <subcommand>` looks for `cargo-<subcommand>` in

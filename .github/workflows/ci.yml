@@ -71,15 +71,16 @@ jobs:
         # live in this repo's Cargo.lock. Without `--locked` the steps below
         # silently rewrote a stale lock and passed, while every `--locked`
         # build elsewhere (`just build-release`, which codetracer's sibling
-        # build runs) failed on it. The same command as `just
-        # check-cargo-lock`, spelled out because the dev shell has no `just`.
-        run: dev-exec cargo metadata --locked --format-version 1 >/dev/null
+        # build runs) failed on it.
+        run: dev-exec just check-cargo-lock
 
-      - name: Check formatting
-        run: dev-exec cargo fmt -- --check
-
-      - name: Run clippy
-        run: dev-exec cargo clippy --locked --all-targets -- -D warnings
+      - name: Lint
+        # `cargo fmt --check`, clippy with warnings denied, the CLI-convention
+        # script, the packaging channels checked in source form (homebrew,
+        # nix, aur, scoop, chocolatey) and tests/verify-package-no-vacuous-pass.sh,
+        # which fails if a skipped packaging check reports OK or if a workflow
+        # stops running these checks or the scheduled replay-smoke lane.
+        run: dev-exec just lint
 
       - name: Build
         run: dev-exec cargo build --locked --all-targets
@@ -89,6 +90,7 @@ jobs:
         # Go 1.26 and the dev shell's Go is 1.25 (flake.nix). Nothing runs it
         # here, because a replay needs a Flow access node; the committed
         # mainnet fixture under tests/fixtures/replay/ is what the tests read.
+        # The live replay runs in the scheduled lane, replay-smoke.yml.
         run: nix build .#cadence-replay-helper --no-link -L
 
       - name: Run tests with zero-test guard

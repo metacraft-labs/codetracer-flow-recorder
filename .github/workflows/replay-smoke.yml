@@ -1,0 +1,105 @@
+name: Replay smoke (Flow mainnet)
+
+# `just replay-smoke` replays a Flow mainnet transaction end to end against the
+# public Flow access node, and fails unless the replay reproduced the chain's
+# result without the observation perturbing it. It is the only check that a
+# live mainnet replay still works; the tests in ci.yml read the committed
+# fixture under tests/fixtures/replay/ instead.
+#
+# It runs on a schedule and on demand, not on push or pull request. The access
+# node is a public service we do not run: an outage of it must not redden the
+# mainline or block a merge, and a regression must still be seen. A daily run
+# is that compromise. The job does not skip when the node is unreachable — it
+# fails, and the failure is the signal to look.
+
+on:
+  schedule:
+    # Daily, 04:17 UTC: off the hour, and before the working day in Europe.
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+    inputs:
+      tx:
+        description: >-
+          Flow mainnet transaction hash (64 hex digits) to replay. Empty
+          replays the recipe's default transaction.
+        required: false
+        default: ""
+        type: string
+
+# The same rule as ci.yml: only a pull request run is ever cancelled, and this
+# workflow has none, so every scheduled or dispatched run keeps its own group.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  replay-smoke:
+    name: Replay smoke (linux-x64)
+    runs-on: [self-hosted, linux, x64]
+    # A recorder build, the helper's nix build and one replay; a hung access
+    # node connection must not hold the runner indefinitely.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Setup dev env
+        # Clones the siblings in .github/sibling-repos (codetracer-trace-format,
+        # codetracer-trace-format-nim) at the repro.lock-pinned revisions, as
+        # in ci.yml.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
+        with:
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
+          attic-token: ${{ secrets.ATTIC_TOKEN }}
+          attic-cache: ${{ vars.ATTIC_CACHE }}
+          attic-endpoint: ${{ vars.ATTIC_ENDPOINT }}
+
+      - name: Build Nim trace writer library (sibling artifact)
+        # The recorder links the Nim trace writer as a static library; built
+        # the same way as in ci.yml. ct-print is not needed: replay-smoke reads
+        # the replay verdict, not the trace.
+        run: |
+          dev-exec bash -c '
+            set -euo pipefail
+            cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+            nimble install -y stew results
+            nim c --app:staticlib --mm:arc --noMain -d:release -p:src \
+              -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          '
+          echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
+      - name: Replay a mainnet transaction
+        # `replay-smoke` builds the recorder and the replay helper itself.
+        # The dispatch input reaches the shell as an environment variable and
+        # is checked to be a transaction hash, so it cannot inject commands.
+        env:
+          TX: ${{ inputs.tx }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${TX}" ]]; then
+            dev-exec just replay-smoke
+          elif [[ "${TX}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            dev-exec just replay-smoke "${TX}"
+          else
+            echo "::error::tx must be 64 hex digits, got '${TX}'"
+            exit 1
+          fi
+
+      - name: Upload the replay output on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-smoke-linux-x64
+          path: target/replay-smoke/
+          retention-days: 7
+          if-no-files-found: warn
